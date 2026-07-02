@@ -1,0 +1,29 @@
+{
+  "name": "hello",
+  "version": "1.0.0",
+  "description": "A simple hello world plugin",
+  "author": "demo",
+  "runtime": "rhai",
+  "mode": "tool",
+  "entry": "script.rhai",
+  "tools": [
+    {
+      "name": "say_hello",
+      "description": "Return a greeting message",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "Name to greet" }
+        },
+        "required": ["name"]
+      }
+    }
+  ],
+  "permissions": [],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "greeting": { "type": "string", "description": "Custom greeting prefix" }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+[package]
+name = "ripple-context"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ripple-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

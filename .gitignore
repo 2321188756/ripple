@@ -1,0 +1,26 @@
+# === Sensitive Data ===
+ripple.db
+logs/
+*.log
+
+# === Build Artifacts ===
+node_modules/
+dist/
+src-tauri/target/
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === Env ===
+.env
+.env.local
+
+# === Plugins (user-installed) ===
+plugins/*/config.json

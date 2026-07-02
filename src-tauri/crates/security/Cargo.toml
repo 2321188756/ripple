@@ -1,0 +1,15 @@
+[package]
+name = "ripple-security"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ripple-core = { workspace = true }
+aes-gcm = { workspace = true }
+argon2 = { workspace = true }
+zeroize = { workspace = true }
+rand = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]

@@ -1,0 +1,15 @@
+[package]
+name = "ripple-rag"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ripple-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+rusqlite = { workspace = true }

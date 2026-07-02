@@ -18,9 +18,16 @@ src-tauri/target/
 .DS_Store
 Thumbs.db
 
+# === Docs (internal) ===
+docs/
+
 # === Env ===
 .env
 .env.local
+
+# === Tauri generated ===
+src-tauri/gen/
+
 
 # === Plugins (user-installed) ===
 plugins/*/config.json

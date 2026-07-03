@@ -15,8 +15,16 @@ pub trait TokenCounter: Send + Sync {
         // 每条消息约 4 token 的角色/分隔开销（OpenAI 经验值）
         let mut n = 4;
         for block in &msg.content {
-            if let ContentBlock::Text { text } = block {
-                n += self.count_text(text);
+            match block {
+                ContentBlock::Text { text } => n += self.count_text(text),
+                // 图片按 OpenAI vision 经验值估算（低细节 ~85，高细节 ~170），取 85
+                ContentBlock::Image { .. } => n += 85,
+                ContentBlock::ToolCall { name, arguments, .. } => {
+                    n += self.count_text(name);
+                    n += self.count_text(&arguments.to_string());
+                }
+                ContentBlock::ToolResult { content, .. } => n += self.count_text(content),
+                ContentBlock::Thinking { text } => n += self.count_text(text),
             }
         }
         n

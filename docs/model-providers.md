@@ -4,48 +4,25 @@
 
 用一个统一 trait 屏蔽各家 API 差异，让对话逻辑、工具调用、流式处理不感知具体 Provider。新增 Provider 只需实现 trait 并注册。
 
+> **当前实现**：仅 `OpenAiProvider`（OpenAI 兼容）。所有模型经 newapi 之类的 OpenAI 兼容端点接入。Anthropic / Google / Ollama 等为规划。
+
 ## 核心 Trait
 
 ```rust
 // crates/model-provider/src/traits.rs
-use async_trait::async_trait;
-use futures::Stream;
-use std::pin::Pin;
-
 #[async_trait]
 pub trait ModelProvider: Send + Sync {
-    /// Provider 唯一标识，如 "openai"
     fn provider_id(&self) -> &str;
-
-    /// 显示名
     fn display_name(&self) -> &str;
-
-    /// 列出可用模型（调用 /models 端点或返回预设）
-    async fn list_models(&self, api_key: &str) -> Result<Vec<ModelInfo>, ProviderError>;
-
-    /// 验证 API Key
-    async fn validate_api_key(&self, api_key: &str) -> Result<bool, ProviderError>;
-
-    /// 非流式补全
-    async fn chat(&self, api_key: &str, request: ChatRequest)
-        -> Result<ChatResponse, ProviderError>;
-
-    /// 流式补全，返回异步 Stream
+    async fn chat(&self, api_key: &str, request: ChatRequest) -> Result<ChatResponse, ProviderError>;
     async fn chat_stream(&self, api_key: &str, request: ChatRequest)
-        -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk, ProviderError>> + Send>>, ProviderError>;
-
-    /// 将内部 ToolDefinition 转为 Provider 特定的 JSON schema
+        -> Result<Pin<Box<dyn Stream<Item = ProviderResult<StreamChunk>> + Send>>, ProviderError>;
     fn convert_tools(&self, tools: &[ToolDefinition]) -> serde_json::Value;
-
-    /// 是否支持工具调用
-    fn supports_tools(&self) -> bool { true }
-
-    /// 是否支持视觉
-    fn supports_vision(&self) -> bool { false }
+    // ...
 }
 ```
 
-## 共享类型
+## 共享类型（`crates/core/src/types.rs`）
 
 ```rust
 pub struct ChatRequest {
@@ -59,9 +36,12 @@ pub struct ChatRequest {
     pub stop_sequences: Option<Vec<String>>,
 }
 
-pub struct ChatMessage {
-    pub role: MessageRole,           // System | User | Assistant | Tool
-    pub content: Vec<ContentBlock>,  // Text | Image | ToolCall | ToolResult | Thinking
+pub enum ContentBlock {
+    Text { text: String },
+    Image { url: String, detail: Option<String> },
+    ToolCall { id: String, name: String, arguments: serde_json::Value },
+    ToolResult { tool_call_id: String, content: String },
+    Thinking { text: String },
 }
 
 pub struct StreamChunk {
@@ -76,123 +56,103 @@ pub struct StreamChunk {
 ## Provider 注册表
 
 ```rust
-pub struct ProviderRegistry {
-    providers: HashMap<String, Box<dyn ModelProvider>>,
-}
-
+// crates/model-provider/src/registry.rs
+pub struct ProviderRegistry { providers: HashMap<String, Arc<dyn ModelProvider>> }
 impl ProviderRegistry {
-    pub fn new() -> Self {
-        let mut r = Self { providers: HashMap::new() };
-        r.register(Box::new(OpenAiProvider::new()));
-        r.register(Box::new(AnthropicProvider::new()));
-        r.register(Box::new(DeepSeekProvider::new()));   // 复用 OpenAI 兼容
-        r.register(Box::new(OllamaProvider::new()));
-        r.register(Box::new(GoogleProvider::new()));
-        r.register(Box::new(OpenRouterProvider::new()));
-        r
-    }
+    pub fn with_builtins() -> Self { /* 注册 OpenAiProvider 等 */ }
 }
 ```
 
-## 内置 Provider
+`commands::chat::do_chat_stream_inner` 中按需用 `OpenAiProvider::new_dynamic("newapi", "newapi", &base_url)` 实例化（当前每请求新建，规划：复用 `reqwest::Client` 存 AppState）。
 
-| Provider | API 格式 | 流式 | 工具调用 | 备注 |
-|----------|----------|------|----------|------|
-| OpenAI | OpenAI Chat | SSE | ✅ | 基准实现 |
-| DeepSeek | OpenAI 兼容 | SSE | ✅ | 复用 OpenAiCompatibleProvider，换 base_url |
-| OpenRouter | OpenAI 兼容 | SSE | ✅ | 同上，聚合多家模型 |
-| Anthropic | Messages API | SSE（不同事件结构） | ✅（不同 schema） | 工具定义需转换 |
-| Ollama | OpenAI 兼容（新版） | SSE | ✅ | 本地 `http://localhost:11434`，无 API Key |
-| Google Gemini | Generative Language API | SSE | ✅ | API Key 在 query param |
+## OpenAiProvider 实现
 
-### OpenAI 兼容复用
+| 能力 | 实现 |
+|------|------|
+| 流式 | `chat_stream` POST `/chat/completions` (stream=true)，`eventsource-stream` 解析 SSE → `StreamChunk` |
+| 非流式 | `chat` POST `/chat/completions`，`map_non_stream_response` 映射 |
+| 工具调用 | 请求体带 `tools`；流式累积 `tool_calls` delta；非流式解析 `tool_calls` |
+| 鉴权 | `Authorization: Bearer <api_key>` |
 
-DeepSeek、OpenRouter、Ollama（新版）、自定义端点都遵循 OpenAI 格式，抽取一个 `OpenAiCompatibleProvider`，按配置注入不同 `base_url` 和模型列表：
+### 非流式响应映射（`map_non_stream_response`）
+
+同时返回 Text 块与 ToolCall 块：
 
 ```rust
-pub struct OpenAiCompatibleProvider {
-    client: reqwest::Client,
-    base_url: String,
-    provider_id: String,
-    display_name: String,
+let mut blocks = Vec::new();
+if !c.message.content.is_empty() {
+    blocks.push(ContentBlock::Text { text: c.message.content.clone() });
 }
-
-impl OpenAiCompatibleProvider {
-    pub fn new(id: &str, name: &str, base_url: &str) -> Self { ... }
+for tc in &c.message.tool_calls {
+    blocks.push(ContentBlock::ToolCall { id: tc.id.clone(), name: tc.function.name.clone(), arguments: ... });
 }
-
-// 注册时
-registry.register(Box::new(OpenAiCompatibleProvider::new(
-    "deepseek", "DeepSeek", "https://api.deepseek.com/v1"
-)));
 ```
 
-### Anthropic 特殊处理
+> 早期版本在 `content` 非空时走 else 分支只产出 Text，丢弃 tool_calls。但 OpenAI 常同时返回文本内容与工具调用，导致非流式工具调用丢失。已修。
 
-- 请求体：`messages` + 顶层 `system`（而非 system role 消息）
-- 工具定义：`name` / `description` / `input_schema`（而非 `parameters`）
-- 流式事件：`message_start` / `content_block_delta` / `message_stop`，需单独解析
-- 思考链：`thinking` content block（Extended Thinking）
-
-## 流式实现要点
+### 流式实现要点
 
 ```rust
-async fn chat_stream(&self, api_key: &str, request: ChatRequest)
-    -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk, ProviderError>> + Send>>, ProviderError>
-{
-    let response = self.client
-        .post(format!("{}/chat/completions", self.base_url))
+async fn chat_stream(&self, api_key, request) -> Result<...> {
+    let response = self.client.post(format!("{}/chat/completions", self.base_url))
         .header("Authorization", format!("Bearer {}", api_key))
         .json(&self.to_openai_request(&request))
-        .send()
-        .await?;
-
-    // bytes_stream → 逐行解析 SSE → 映射为 StreamChunk
+        .send().await?;
     let stream = response.bytes_stream()
         .map(|r| parse_sse_line(r?))
         .filter_map(|event| async move { event.map(|e| map_to_chunk(e)) });
-
     Ok(Box::pin(stream))
 }
 ```
 
-SSE 解析交给 `eventsource-stream`，业务层只做 `OpenAI chunk JSON → StreamChunk` 的映射。
+## 工具调用循环（`chat_with_tools`）
 
-## 自定义 Provider（用户自配）
-
-设置页允许用户添加任意 OpenAI 兼容端点（如 Azure OpenAI、本地 vLLM、LM Studio）：
-
-```typescript
-invoke("provider_add", {
-  config: {
-    providerType: "custom_openai",
-    displayName: "我的本地模型",
-    apiBaseUrl: "http://localhost:8000/v1"
-  },
-  apiKey: "..."
-})
+```rust
+const MAX_TOOL_ROUNDS: u32 = 8;  // 防止模型反复 tool call 死循环
+let mut had_error = false;
+loop {
+    if cancelled.load(SeqCst) { break; }              // 锁存取消兜底
+    if iterations >= MAX_TOOL_ROUNDS { break; }
+    iterations += 1;
+    let stream = provider.chat_stream(api_key, request.clone()).await?;
+    let mut aborted = false;
+    tokio::select! {
+        _ = consume_stream(stream, |ev| match ev {
+            Text(t) => { collected_text.push_str(&t); emit("chat:stream-chunk", ...); }
+            Signal(chunk) => { /* 累积 tool_calls / finish_reason */ }
+            Error(e) => { had_error = true; }          // 不静默，设标志
+            End => {}
+        }) => {}
+        _ = cancel.notified() => { aborted = true; }  // stop_generation 中断
+    }
+    if aborted || had_error || tool_calls.is_empty() { break; }
+    // 执行工具 → emit("chat:tool-call") → 回填 tool 结果 → 继续循环
+}
+if had_error {
+    emit("chat:gen-error", ...);                        // 通知前端，不静默截断
+    return Ok(collected_text);                          // 保留部分文本（spawn 落库）
+}
+emit("chat:gen-complete", ...);
+Ok(collected_text)
 ```
 
-后端用 `OpenAiCompatibleProvider` 实例化并注册。
+## 取消机制
+
+`stop_generation` 从 `active_streams` 取出该会话的 `ActiveStream`，`cancelled.store(true)` + `cancel.notify_waiters()`。`chat_with_tools` 的 `select!` 收到 notify 后丢弃 `consume_stream` future（HTTP 流中断），返回已累积的部分文本。
 
 ## 错误处理
 
 ```rust
-#[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
-    #[error("Network error: {0}")]
-    Network(#[from] reqwest::Error),
-    #[error("API error ({status}): {body}")]
-    Api { status: u16, body: String },
-    #[error("Invalid API key")]
+    Network(String),
+    Api { status: u16, body: String },  // 如 400/401/429
     InvalidApiKey,
-    #[error("Rate limited")]
     RateLimited,
-    #[error("Stream parse error: {0}")]
     StreamParse(String),
-    #[error("Model not found: {0}")]
-    ModelNotFound(String),
+    ...
 }
 ```
 
-错误映射为前端可读消息，并在 `chat:gen-error` 事件中携带 `errorCode` 供前端区分（如限流时显示重试按钮）。
+错误经 `chat:gen-error` 事件 `{ conversation_id, message_id, error }` 推前端；前端 `handleStreamError` 保留已生成部分为助手消息、清流、显示错误横幅。
+
+> 流式 400 错误（如模型不支持 `image_url`）经此路径提示用户，不再静默截断当成功。

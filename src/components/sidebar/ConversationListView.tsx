@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,6 +7,15 @@ import { useSearch } from "@/hooks/useSearch";
 import { conversationService } from "@/services";
 import { useChatStore } from "@/stores/chatStore";
 import type { Conversation } from "@/types";
+
+/** 转义后端搜索片段中的 HTML，防止消息正文里的 <script> 等被注入（XSS）。
+ *  以纯文本渲染，放弃可能的 <mark> 高亮标记以换取安全性。 */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
 
 interface ConversationListViewProps {
   conversations: Conversation[];
@@ -46,8 +56,9 @@ export function ConversationListView({
     onReload();
   };
 
-  const sorted = [...conversations].sort(
-    (a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0),
+  const sorted = useMemo(
+    () => [...conversations].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0)),
+    [conversations],
   );
 
   return (
@@ -89,10 +100,9 @@ export function ConversationListView({
               <div className="text-muted-foreground truncate">
                 {r.role} · {new Date(r.created_at).toLocaleTimeString()}
               </div>
-              <div
-                className="text-foreground/80 line-clamp-2"
-                dangerouslySetInnerHTML={{ __html: r.snippet }}
-              />
+              <div className="text-foreground/80 line-clamp-2 whitespace-pre-wrap">
+                {escapeHtml(r.snippet)}
+              </div>
             </div>
           ))
         ) : (

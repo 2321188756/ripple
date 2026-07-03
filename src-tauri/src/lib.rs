@@ -88,7 +88,6 @@ pub fn run() {
                 active_streams: std::sync::Arc::new(tokio::sync::Mutex::new(
                     std::collections::HashMap::new(),
                 )),
-                interrupted: std::sync::Arc::new(tokio::sync::Notify::new()),
             };
 
             app.manage(state);
@@ -110,6 +109,9 @@ pub fn run() {
             commands::rag_cmd::delete_document,
             commands::rag_cmd::get_document_content,
             commands::rag_cmd::update_document_content,
+            commands::rag_cmd::import_folder,
+            commands::rag_cmd::batch_delete_documents,
+            commands::rag_cmd::rename_document,
             commands::test::ping,
             commands::test_chat::test_chat,
             commands::settings::get_setting,
@@ -125,6 +127,7 @@ pub fn run() {
             commands::log::get_logs,
             commands::chat::send_message,
             commands::chat::stop_generation,
+            commands::chat::regenerate,
             commands::export::export_conversation,
             commands::export::import_conversation,
             commands::conversation::create_conversation,
@@ -134,6 +137,8 @@ pub fn run() {
             commands::conversation::update_conversation,
             commands::message::get_messages,
             commands::message::search_messages,
+            commands::message::update_message,
+            commands::message::delete_messages_from,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

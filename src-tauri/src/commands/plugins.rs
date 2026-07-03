@@ -115,9 +115,12 @@ pub fn plugin_tools() -> Vec<ToolDefinition> {
 }
 
 /// 执行插件工具
-/// 从 "plugin_name:tool_name" 格式的完整工具名执行
+/// 从 "plugin_{name}:{tool_name}" 格式的完整工具名执行
 pub fn exec_by_tool_name(full_name: &str, args: &serde_json::Value) -> Result<String, String> {
-    let parts: Vec<&str> = full_name.splitn(2, ':').collect();
+    // 工具注册名为 `plugin_{name}:{tool}`（见 plugin_tools），但注册表以 `{name}` 为键，
+    // 故此处先剥离 `plugin_` 前缀再按 ':' 拆分，否则 registry.get 永远 NotFound。
+    let stripped = full_name.strip_prefix("plugin_").unwrap_or(full_name);
+    let parts: Vec<&str> = stripped.splitn(2, ':').collect();
     if parts.len() != 2 {
         return Err(format!("invalid plugin tool name: {full_name}"));
     }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Pin, PinOff, Trash2, Pencil, Check, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -26,8 +26,18 @@ export function ConversationListItem({
 }: ConversationListItemProps) {
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(conv.title);
+  // 防止 Enter 提交后 input 卸载触发 onBlur 二次提交（onRename 被调两次）
+  const committedRef = useRef(false);
+
+  const startEdit = () => {
+    committedRef.current = false;
+    setVal(conv.title);
+    setEditing(true);
+  };
 
   const commit = () => {
+    if (committedRef.current) return;
+    committedRef.current = true;
     if (val.trim() && val !== conv.title) onRename(val.trim());
     setEditing(false);
   };
@@ -65,10 +75,7 @@ export function ConversationListItem({
           <div
             className="flex-1 min-w-0"
             onClick={onSelect}
-            onDoubleClick={() => {
-              setVal(conv.title);
-              setEditing(true);
-            }}
+            onDoubleClick={startEdit}
           >
             <div className="truncate font-medium text-xs flex items-center gap-1">
               {conv.pinned && <Pin className="w-2.5 h-2.5 text-amber-500 inline" />}
@@ -110,8 +117,7 @@ export function ConversationListItem({
                       className="h-6 w-6"
                       onClick={(e) => {
                         e.stopPropagation();
-                        setVal(conv.title);
-                        setEditing(true);
+                        startEdit();
                       }}
                       aria-label="重命名"
                     >

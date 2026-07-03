@@ -21,7 +21,7 @@ export function LogsPanel({ active }: LogsPanelProps) {
       </div>
       <pre
         ref={scrollRef}
-        className="bg-zinc-950 text-green-300 text-[11px] p-3 rounded-lg overflow-auto max-h-[50vh] leading-relaxed font-mono"
+        className="bg-zinc-950 text-green-300 text-[11px] p-3 rounded-lg overflow-auto flex-1 min-h-0 leading-relaxed font-mono"
       >
         {logLines.length === 0 ? "(empty)" : logLines.map((l, i) => <div key={i}>{l}</div>)}
       </pre>

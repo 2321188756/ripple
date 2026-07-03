@@ -2,132 +2,114 @@
 
 前端通过 `invoke()` 调用后端命令，通过 `listen()` 接收后端事件。命名约定：
 
-- **命令**：`<domain>_<action>`，snake_case（如 `conversation_create`）
+- **命令**：`<verb>_<noun>` 或 `<noun>_<verb>`，snake_case（如 `create_conversation`、`send_message`、`list_conversations`）
 - **事件**：`<domain>:<event>`，kebab-case（如 `chat:stream-chunk`）
+- 所有命令返回 `Result<T, String>`，错误序列化为可读字符串
 
-所有命令返回 `Result<T, String>`，错误序列化为可读字符串。
+前端封装在 `src/services/`，统一经 `invokeWithTimeout`（8s 超时）调用。
 
 ---
 
 ## 对话管理
 
 ```typescript
-// 创建对话
-invoke("conversation_create", {
-  title?: string,
-  modelId?: string,
-  providerId?: string,
-  systemPrompt?: string
+invoke("create_conversation", {
+  providerId?: string, modelId?: string, title?: string,
+  systemPrompt?: string, agentId?: string
+}): Promise<Conversation>   // agentId 会把 agent 的 system_prompt 写入并标记 metadata.agent_id
+
+invoke("list_conversations", {
+  search?: string, limit?: number, offset?: number, agentId?: string
+}): Promise<Conversation[]>  // agentId 时按 metadata LIKE 过滤该 Agent 的会话
+
+invoke("get_conversation", { id: string }): Promise<Conversation>
+invoke("update_conversation", {
+  id: string, title?: string, systemPrompt?: string,
+  pinned?: boolean, archived?: boolean
 }): Promise<Conversation>
-
-// 列表（支持搜索、分页）
-invoke("conversation_list", {
-  search?: string,
-  limit?: number,    // 默认 50
-  offset?: number
-}): Promise<Conversation[]>
-
-// 获取单个
-invoke("conversation_get", { id: string }): Promise<Conversation>
-
-// 更新（标题/系统提示/置顶/归档）
-invoke("conversation_update", {
-  id: string,
-  title?: string,
-  systemPrompt?: string,
-  pinned?: boolean,
-  archived?: boolean
-}): Promise<Conversation>
-
-// 删除
-invoke("conversation_delete", { id: string }): Promise<void>
-
-// 获取消息（cursor 分页）
-invoke("message_list", {
-  conversationId: string,
-  limit?: number,     // 默认 50
-  beforeId?: string   // 向前翻页游标
-}): Promise<Message[]>
+invoke("delete_conversation", { id: string }): Promise<void>
 ```
 
-## 聊天
+## 消息
 
 ```typescript
-// 发送消息（触发流式）
+invoke("get_messages", { conversationId: string, limit?: number, offset?: number }): Promise<Message[]>
+invoke("search_messages", { query: string, limit?: number }): Promise<SearchResult[]>
+invoke("update_message", { id: string, content: string }): Promise<Message>  // 仅 user 消息可编辑
+invoke("delete_messages_from", { conversationId: string, fromMessageId: string }): Promise<void>
+// delete_from 会校验 fromMessageId 存在，不存在返回错误（不删光）
+```
+
+## 聊天（流式）
+
+```typescript
 invoke("send_message", {
-  conversationId: string,
-  content: string,
-  attachments?: Attachment[],
-  knowledgeRefs?: string[]   // @引用的知识库 ID
+  conversationId: string, content: string,
+  apiKey: string, apiBaseUrl?: string, model?: string,
+  agentMode?: boolean, images?: string[]  // dataURL
 }): Promise<string>   // 返回 assistant message_id
 
-// 停止生成
 invoke("stop_generation", { conversationId: string }): Promise<void>
+// 真正取消：触发 ActiveStream.cancel.notify_waiters + cancelled 标志，
+// chat_with_tools 的 select! 中断 HTTP 流，保留已生成部分文本
 
-// 重新生成
-invoke("regenerate_message", {
-  conversationId: string,
-  messageId: string
-}): Promise<string>
-
-// 审批工具调用
-invoke("approve_tool_call", {
-  toolCallId: string,
-  approved: boolean
-}): Promise<void>
+invoke("regenerate", {
+  conversationId: string, messageId: string,
+  apiKey: string, apiBaseUrl?: string, model?: string, agentMode?: boolean
+}): Promise<string>  // 删 message_id 及其后消息，重新生成
 ```
 
-## 模型管理
+## Agent
 
 ```typescript
-invoke("provider_list"): Promise<ProviderConfig[]>
-invoke("provider_add", { config: ProviderConfig, apiKey: string }): Promise<ProviderConfig>
-invoke("provider_delete", { id: string }): Promise<void>
-invoke("provider_test_connection", { providerId: string }): Promise<boolean>
-invoke("provider_fetch_models", { providerId: string }): Promise<ModelInfo[]>
-invoke("model_set_active", { providerId: string, modelId: string }): Promise<void>
-```
-
-## 工具
-
-```typescript
-invoke("tool_list"): Promise<ToolDefinition[]>
-invoke("tool_toggle", { name: string, enabled: boolean }): Promise<void>
-```
-
-## 插件
-
-```typescript
-invoke("plugin_list"): Promise<PluginManifest[]>
-invoke("plugin_install", { wasmBytes: number[], manifest: PluginManifest }): Promise<PluginManifest>
-invoke("plugin_uninstall", { pluginId: string }): Promise<void>
-invoke("plugin_toggle", { pluginId: string, enabled: boolean }): Promise<void>
-invoke("plugin_configure", { pluginId: string, config: Record<string, unknown> }): Promise<void>
+invoke("list_agents"): Promise<Agent[]>
+invoke("create_agent", { name, description?, systemPrompt? }): Promise<string>
+invoke("update_agent", { id, updates }): Promise<void>  // system_prompt 需同时传 system_prompt 和 systemPrompt
+invoke("delete_agent", { id }): Promise<void>
+invoke("get_agent", { id }): Promise<Agent>
 ```
 
 ## 知识库（RAG）
 
 ```typescript
-invoke("kb_list"): Promise<KnowledgeBase[]>
-invoke("kb_create", { name: string, config: KbConfig }): Promise<KnowledgeBase>
-invoke("kb_delete", { id: string }): Promise<void>
-invoke("kb_import_document", { kbId: string, filePath: string }): Promise<Document>
-invoke("kb_search", { query: string, kbId?: string, topK?: number }): Promise<Chunk[]>
-invoke("kb_reindex", { kbId: string }): Promise<void>
+invoke("create_kb", { name, description }): Promise<KnowledgeBase>
+invoke("list_kbs"): Promise<KnowledgeBase[]>
+invoke("delete_kb", { id }): Promise<void>  // 事务删 chunks/documents/knowledge_bases
+invoke("list_docs", { kbId }): Promise<Document[]>
+invoke("import_document", { kbId, filePath, apiKey, apiBaseUrl?, embeddingModel? }): Promise<Document>
+invoke("import_folder", { kbId, folderPath, apiKey, apiBaseUrl?, embeddingModel? }): Promise<Document[]>
+// 嵌入批次失败时中止整篇文档并标 error（不 zip 错配）
+invoke("search_kb", { query, kbId?, topK? }): Promise<SearchResult[]>
+invoke("delete_document", { id }): Promise<void>
+invoke("get_document_content", { id }): Promise<string>  // 拼接所有 chunk 全文
+invoke("update_document_content", { id, content, apiKey, apiBaseUrl? }): Promise<void>  // 删旧 chunk 重新分块嵌入
+invoke("rename_document", { id, newName }): Promise<Document>
+invoke("batch_delete_documents", { ids: string[] }): Promise<void>
 ```
 
-## 设置
+## 插件
 
 ```typescript
-invoke("settings_get", { keys: string[] }): Promise<Record<string, unknown>>
-invoke("settings_set", { settings: Record<string, unknown> }): Promise<void>
+invoke("list_plugins"): Promise<PluginManifest[]>
+invoke("toggle_plugin", { name, enabled }): Promise<void>
+invoke("execute_plugin_tool", { toolName, args }): Promise<string>  // toolName 格式 "plugin.tool"
+invoke("get_plugin_config", { name }): Promise<Record<string, unknown>>
+invoke("set_plugin_config", { name, config }): Promise<void>
 ```
 
-## 搜索
+## 设置 / 统计 / 导出 / 日志 / 测试
 
 ```typescript
-invoke("search_conversations", { query: string, limit?: number }): Promise<SearchResult[]>
-invoke("search_messages", { query: string, conversationId?: string, limit?: number }): Promise<SearchResult[]>
+invoke("get_setting", { key }): Promise<string | null>
+invoke("set_setting", { key, value }): Promise<void>
+invoke("get_usage_stats"): Promise<UsageStats>
+invoke("export_conversation", { conversationId, format }): Promise<string>
+invoke("import_conversation", { data }): Promise<Conversation>
+invoke("log_event", { level, message }): Promise<void>
+invoke("get_log_path"): Promise<string>
+invoke("get_logs", { ... }): Promise<...>
+invoke("ping"): Promise<string>            // IPC 健康检查
+invoke("test_chat", { ... }): Promise<...>  // API 连通测试
 ```
 
 ---
@@ -137,44 +119,32 @@ invoke("search_messages", { query: string, conversationId?: string, limit?: numb
 ### 流式块
 ```typescript
 listen("chat:stream-chunk", (e) => {
-  // e.payload: { conversationId, messageId, deltaText?, deltaThinking?, toolCalls?, finishReason? }
+  // e.payload: { conversation_id, message_id, delta_text: string|null, finish_reason: string|null }
 })
 ```
 
 ### 工具调用
 ```typescript
 listen("chat:tool-call", (e) => {
-  // e.payload: { conversationId, messageId, toolCallId, toolName, toolInput, requiresApproval }
-})
-
-listen("chat:tool-result", (e) => {
-  // e.payload: { conversationId, messageId, toolCallId, status: "success"|"error", output }
+  // e.payload: { tool_name, tool_input, tool_output, status: "success"|"error" }
 })
 ```
 
-### 生成完成/错误
+### 生成完成 / 错误
 ```typescript
 listen("chat:gen-complete", (e) => {
-  // e.payload: { conversationId, messageId, usage: { promptTokens, completionTokens, totalTokens } }
+  // e.payload: { conversation_id, message_id, usage: { prompt_tokens, completion_tokens, total_tokens } }
 })
-
 listen("chat:gen-error", (e) => {
-  // e.payload: { conversationId, messageId, error, errorCode }
+  // e.payload: { conversation_id, message_id, error: string }
+  // 前端 handleStreamError：保留已生成部分为助手消息，清流，设置 error
 })
 ```
 
-### 对话标题自动生成
+### 跨窗口同步（前端 → 前端）
 ```typescript
-listen("conversation:title-generated", (e) => {
-  // e.payload: { conversationId, title }
-})
-```
-
-### RAG 索引进度
-```typescript
-listen("kb:index-progress", (e) => {
-  // e.payload: { kbId, documentId, status, processed, total }
-})
+// 设置窗口改动 settingsStore/kbStore 后广播，主窗口 listen 后 reload
+emit("ripple:settings-changed")
 ```
 
 ---
@@ -182,25 +152,14 @@ listen("kb:index-progress", (e) => {
 ## 前端调用示例
 
 ```typescript
-import { invoke } from "@tauri-apps/api/core"
-import { listen } from "@tauri-apps/api/event"
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
-async function sendMessage(conversationId: string, content: string) {
-  // 发送前注册事件监听
-  const unlistenChunk = await listen<{ messageId: string; deltaText?: string }>(
-    "chat:stream-chunk",
-    (e) => {
-      if (e.payload.conversationId === conversationId) {
-        appendStreamingText(e.payload.messageId, e.payload.deltaText)
-      }
-    }
-  )
-
-  const unlistenComplete = await listen("chat:gen-complete", () => {
-    unlistenChunk()
-    unlistenComplete()
-  })
-
-  await invoke("send_message", { conversationId, content })
-}
+// 流式事件在 App 顶层由 useStreamEvents hook 统一注册，转发到 chatStore：
+//   chat:stream-chunk → appendToStreaming
+//   chat:gen-complete → finalizeStreaming（用 payload.conversation_id 落库）
+//   chat:gen-error    → handleStreamError（保留部分 + 清流 + 设错误）
+//   chat:tool-call    → addToolEvent(activeId, payload)
 ```
+
+`send_message` 立即返回 message_id，流式经事件推送；前端 `sendMessage` 在 await 前先置 `streamingText:""`，`appendToStreaming` 锁存首块 message_id，避免快模型首块竞态丢字。

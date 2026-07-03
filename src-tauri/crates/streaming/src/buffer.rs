@@ -64,7 +64,7 @@ impl StreamBuffer {
         self.buffer.push_str(delta);
 
         if self.last_emit.elapsed() >= self.config.min_interval
-            || self.buffer.len() >= self.config.max_chars
+            || self.buffer.chars().count() >= self.config.max_chars
         {
             Some(self.drain())
         } else {

@@ -7,6 +7,8 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (1, MIGRATION_001_INITIAL),
     (2, MIGRATION_002_RAG),
     (3, MIGRATION_003_AGENTS),
+    (4, MIGRATION_004_AGENT_STYLE),
+    (5, MIGRATION_005_FTS_TRIGGERS),
 ];
 
 /// 001: 初始 schema —— 核心业务表
@@ -188,6 +190,54 @@ CREATE TABLE IF NOT EXISTS agents (
 INSERT OR IGNORE INTO schema_version (version) VALUES (3);
 "#;
 
+const MIGRATION_004_AGENT_STYLE: &str = r#"
+ALTER TABLE agents ADD COLUMN icon_color TEXT NOT NULL DEFAULT '#6366f1';
+ALTER TABLE agents ADD COLUMN border_color TEXT NOT NULL DEFAULT '#6366f1';
+ALTER TABLE agents ADD COLUMN border_width INTEGER NOT NULL DEFAULT 3;
+ALTER TABLE agents ADD COLUMN name_color TEXT NOT NULL DEFAULT '#1e293b';
+ALTER TABLE agents ADD COLUMN temperature REAL NOT NULL DEFAULT 0.7;
+ALTER TABLE agents ADD COLUMN max_tokens INTEGER NOT NULL DEFAULT 4096;
+ALTER TABLE agents ADD COLUMN top_p REAL NOT NULL DEFAULT 1.0;
+
+INSERT OR IGNORE INTO schema_version (version) VALUES (4);
+"#;
+
+/// 005: 补齐 FTS5 触发器。
+///  - `chunks_fts` 此前建表却无 INSERT 触发器，`hybrid_search` 的 FTS5 分支始终查空表，
+///    导致"混合检索"退化为纯向量检索，关键词精确匹配完全失效。本迁移补齐
+///    chunks 的 INSERT/DELETE/UPDATE 触发器，并回填现有 chunks。
+///  - `messages_fts` 此前只有 INSERT 触发器，删/改消息后索引陈旧、rowid 复用会串内容，
+///    这里补齐 DELETE/UPDATE 触发器。
+const MIGRATION_005_FTS_TRIGGERS: &str = r#"
+CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+    INSERT INTO chunks_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+    DELETE FROM chunks_fts WHERE rowid = old.rowid;
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
+    DELETE FROM chunks_fts WHERE rowid = old.rowid;
+    INSERT INTO chunks_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+
+-- 回填现有 chunks（此前 chunks_fts 为空，触发器只对新插入生效）
+INSERT INTO chunks_fts(rowid, content) SELECT rowid, content FROM chunks;
+
+CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+    DELETE FROM messages_fts WHERE rowid = old.rowid;
+END;
+
+CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+    DELETE FROM messages_fts WHERE rowid = old.rowid;
+    INSERT INTO messages_fts(rowid, conversation_id, content_text)
+    VALUES (new.rowid, new.conversation_id, json_extract(new.content, '$[0].text'));
+END;
+
+INSERT OR IGNORE INTO schema_version (version) VALUES (5);
+"#;
+
 /// 运行所有待执行的迁移。
 pub fn run_migrations(conn: &rusqlite::Connection) -> StoreResult<()> {
     // 确保版本表存在（migration v1 也会创建它，但可能连 v1 都还没跑）
@@ -202,12 +252,23 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> StoreResult<()> {
 
     for (version, sql) in MIGRATIONS {
         if *version > current {
-            conn.execute_batch(sql)
+            // 每个迁移独立事务：中途失败整体回滚。否则多语句迁移（如 004 的 7 条
+            // ALTER TABLE ADD COLUMN）部分提交后会留下半应用状态，重试时首条语句因
+            // "列/表已存在"报错，数据库永久卡死、启动崩溃。
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| crate::StoreError::Database(e.to_string()))?;
+            tx.execute_batch(sql)
                 .map_err(|e| crate::StoreError::Migration {
                     version: *version,
                     details: e.to_string(),
                 })?;
-            conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (?1)", [version])
+            tx.execute(
+                "INSERT OR IGNORE INTO schema_version (version) VALUES (?1)",
+                [version],
+            )
+            .map_err(|e| crate::StoreError::Database(e.to_string()))?;
+            tx.commit()
                 .map_err(|e| crate::StoreError::Database(e.to_string()))?;
         }
     }

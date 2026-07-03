@@ -159,6 +159,54 @@ impl MessageRepo {
         Ok(out)
     }
 
+    /// 更新消息内容（仅允许更新 text 消息）
+    pub fn update_content(
+        conn: &PooledConnection<SqliteConnectionManager>,
+        id: &str,
+        new_content: &str,
+    ) -> StoreResult<()> {
+        let content_block = vec![ripple_core::ContentBlock::Text { text: new_content.to_string() }];
+        let content_json = serde_json::to_string(&content_block)
+            .map_err(|e| StoreError::InvalidData(e.to_string()))?;
+        conn.execute(
+            "UPDATE messages SET content = ?1 WHERE id = ?2",
+            params![content_json, id],
+        )
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// 删除指定对话中在某条消息之后的所有消息（含该条本身）
+    ///
+    /// 安全性：必须先校验 `from_message_id` 存在并取其 `created_at` 作为基准。
+    /// 早期版本用 `COALESCE(..., '1970-...')` 回退，当 id 不存在时会以 1970 年为
+    /// 基准命中全部消息，导致整段对话被清空。这里改为缺失即报错。
+    pub fn delete_from(
+        conn: &PooledConnection<SqliteConnectionManager>,
+        conversation_id: &str,
+        from_message_id: &str,
+    ) -> StoreResult<()> {
+        let base_created: String = conn
+            .query_row(
+                "SELECT created_at FROM messages WHERE id = ?1 AND conversation_id = ?2",
+                params![from_message_id, conversation_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    StoreError::NotFound(format!("message {from_message_id}")
+                )
+                }
+                _ => StoreError::Database(e.to_string()),
+            })?;
+        conn.execute(
+            "DELETE FROM messages WHERE conversation_id = ?1 AND created_at >= ?2",
+            params![conversation_id, base_created],
+        )
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+
     /// 获取某对话中最新一条消息，用于标题自动生成
     pub fn get_latest_message(
         conn: &PooledConnection<SqliteConnectionManager>,

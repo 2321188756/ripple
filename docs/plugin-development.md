@@ -1,35 +1,40 @@
 # 插件开发指南
 
-Ripple 插件用 WebAssembly（WASM）实现，在 wasmtime 沙箱中运行。插件可注册自定义工具，供 AI 在对话中调用。
+Ripple 插件用脚本实现，按 `runtime` 字段选择运行时：rhai（沙箱）/ node / python / shell（子进程）。插件可注册自定义工具，供 AI 在对话中调用。
 
-## 为什么用 WASM
+> **注意**：不使用 WASM/wasmtime（早期规划，未实现）。插件直接通过 `std::process::Command` 调用外部解释器，或用内置 rhai 沙箱。
 
-| 特性 | 说明 |
-|------|------|
-| 内存隔离 | 插件崩溃不影响主进程 |
-| 权限沙箱 | 能力令牌系统，无法越权访问系统 |
-| 跨平台 | 一次编译，Windows/macOS/Linux 通用 |
-| 语言无关 | Rust、C/C++、AssemblyScript 等均可编译为 WASM |
+## 运行时
+
+| runtime | 执行方式 | 说明 |
+|---------|----------|------|
+| `rhai` | 内置沙箱（`exec_rhai`） | 目前返回脚本内容本身，后续接入完整 rhai 引擎 |
+| `node` | `node <entry> <args_json>` 子进程 | 需系统装 Node.js |
+| `python` / `py` | `python <entry> <args_json>` 子进程 | 需系统装 Python |
+| `shell` / `bash` | `bash <entry> <args_json>` 子进程 | Shell 脚本 |
+
+工具参数经 JSON 字符串作为命令行参数传入；标准输出为工具结果，非零退出码为错误。
 
 ## 插件结构
 
 ```
 my-plugin/
-├── manifest.json     # 清单：声明工具、权限、配置
-├── plugin.wasm       # 编译后的 WASM 模块
-└── README.md
+├── manifest.json     # 清单：声明运行时、工具、配置
+├── index.js          # 入口（runtime=node 时）
+└── config.json       # 运行时配置（UI 编辑生成，可选）
 ```
 
 ## Manifest 格式
 
 ```json
 {
-  "id": "weather-plugin",
-  "name": "天气查询",
+  "name": "weather",
   "version": "1.0.0",
   "description": "查询城市天气",
   "author": "you",
-  "wasm_file": "plugin.wasm",
+  "runtime": "node",
+  "entry": "index.js",
+  "mode": "tool",
   "tools": [
     {
       "name": "get_weather",
@@ -37,194 +42,121 @@ my-plugin/
       "parameters": {
         "type": "object",
         "properties": {
-          "city": { "type": "string", "description": "City name" },
-          "units": { "type": "string", "enum": ["metric", "imperial"], "default": "metric" }
+          "city": { "type": "string" }
         },
         "required": ["city"]
       }
     }
   ],
-  "permissions": ["http:api.openweathermap.org"],
+  "permissions": [],
   "config_schema": {
     "type": "object",
     "properties": {
-      "api_key": { "type": "string", "description": "OpenWeatherMap API key" }
-    },
-    "required": ["api_key"]
+      "api_key": { "type": "string", "description": "API key" }
+    }
   }
 }
 ```
 
-## WIT 接口
+| 字段 | 说明 |
+|------|------|
+| `name` | 插件唯一标识（注册表键） |
+| `runtime` | `rhai` / `node` / `python` / `shell` |
+| `entry` | 入口文件路径（相对 `plugins/<name>/`） |
+| `mode` | `tool`（AI 调用）/ `transform`（消息处理）/ `daemon`（后台） |
+| `tools` | 注册的工具列表 |
+| `permissions` | 权限声明（保留） |
+| `config_schema` | 可编辑配置字段，UI 据此生成表单，存 `config.json` |
 
-插件需导出 `tool-handler` 接口，可导入 `host` 接口：
+## 入口脚本示例（node）
 
-```wit
-package ripple:plugin;
+```js
+// index.js
+const args = JSON.parse(process.argv[2] || "{}");
+const { city } = args;
 
-interface tool-handler {
-    init: func(config: string) -> result<_, string>;
-    list-tools: func() -> list<tool-def>;
-    execute: func(tool-name: string, arguments: string) -> result<string, string>;
-    shutdown: func();
+if (!city) {
+  console.error("missing city");
+  process.exit(1);
 }
-
-interface host {
-    http-request: func(method: string, url: string, headers: list<tuple<string,string>>, body: option<string>) -> result<http-response, string>;
-    file-read: func(path: string) -> result<list<u8>, string>;
-    log: func(level: string, message: string);
-}
-
-record tool-def {
-    name: string,
-    description: string,
-    parameters: string,
-}
-
-world plugin-world {
-    import host;
-    export tool-handler;
-}
+// 调用 API...
+const result = { city, temp: 20, description: "sunny" };
+console.log(JSON.stringify(result));  // stdout 作为工具结果
 ```
 
-## 用 Rust 开发插件
+## 工具注册与执行
 
-```bash
-# 安装 wasm32 target
-rustup target add wasm32-wasi
+### 注册（`plugin_tools`）
 
-# 用 cargo-component 创建项目
-cargo new --lib my-plugin
-cd my-plugin
-```
-
-`Cargo.toml`:
-```toml
-[package]
-name = "weather-plugin"
-version = "1.0.0"
-edition = "2021"
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-wit-bindgen = "0.30"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-```
-
-`src/lib.rs`:
 ```rust
-use serde::{Deserialize, Serialize};
-
-#[derive(Deserialize)]
-struct WeatherArgs {
-    city: String,
-    units: Option<String>,
-}
-
-#[derive(Serialize)]
-struct WeatherResult {
-    city: String,
-    temp: f64,
-    description: String,
-}
-
-wit_bindgen::generate!({
-    path: "../wit/plugin.wit",
-    world: "plugin-world",
-});
-
-struct Plugin;
-
-impl Guest for Plugin {
-    fn init(_config: String) -> Result<(), String> { Ok(()) }
-
-    fn list_tools() -> Vec<ToolDef> {
-        vec![ToolDef {
-            name: "get_weather".into(),
-            description: "Get current weather for a city".into(),
-            parameters: r#"{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}"#.into(),
-        }]
+// src/commands/plugins.rs
+for (name, plugin) in registry.iter() {
+    for pt in &plugin.manifest.tools {
+        tools.push(ToolDefinition {
+            name: format!("plugin_{}:{}", name, pt.name),  // 注册名带 plugin_ 前缀
+            description: format!("[{}] {}", name, pt.description),
+            parameters: pt.parameters.clone(),
+            source: ToolSource::Plugin { plugin_id: name.clone() },
+            requires_approval: plugin.manifest.runtime != "rhai",
+        });
     }
-
-    fn execute(tool_name: String, arguments: String) -> Result<String, String> {
-        if tool_name != "get_weather" {
-            return Err(format!("Unknown tool: {}", tool_name));
-        }
-        let args: WeatherArgs = serde_json::from_str(&arguments).map_err(|e| e.to_string())?;
-
-        // 通过 host http-request 调用 API（受 permissions 限制）
-        let resp = http_request(
-            "GET",
-            &format!("https://api.openweathermap.org/data/2.5/weather?q={}&units=metric", args.city),
-            &[], None,
-        ).map_err(|e| e.to_string())?;
-
-        // 解析并返回
-        let result = WeatherResult { city: args.city, temp: 20.0, description: "sunny".into() };
-        serde_json::to_string(&result).map_err(|e| e.to_string())
-    }
-
-    fn shutdown() {}
 }
-
-export_plugin!(Plugin);
 ```
 
-编译：
-```bash
-cargo build --target wasm32-wasi --release
-# 产物：target/wasm32-wasi/release/weather_plugin.wasm
+### 执行（`exec_by_tool_name`）
+
+AI 调用工具时，`chat.rs` 匹配 `other if other.starts_with("plugin_")` → `exec_by_tool_name(other, args)`：
+
+```rust
+pub fn exec_by_tool_name(full_name: &str, args: &serde_json::Value) -> Result<String, String> {
+    // 关键：先剥离 plugin_ 前缀再按 ':' 拆分。
+    // 注册表以 {name} 为键，不剥离的话 registry.get("plugin_{name}") 永远 NotFound。
+    let stripped = full_name.strip_prefix("plugin_").unwrap_or(full_name);
+    let parts: Vec<&str> = stripped.splitn(2, ':').collect();
+    if parts.len() != 2 { return Err(format!("invalid plugin tool name: {full_name}")); }
+    exec_plugin_tool(parts[0], parts[1], args)
+}
 ```
 
-## 能力令牌（权限）
+> 早期版本未剥离前缀，所有插件工具调用 100% 失败（"plugin not found: plugin_xxx"）。已修。
 
-插件在 manifest 声明所需权限，运行时强制校验：
+```rust
+pub fn exec_plugin_tool(plugin_name, tool_name, args) -> Result<String, String> {
+    let plugin = registry.get(plugin_name).ok_or_else(|| format!("plugin not found: {plugin_name}"))?;
+    let entry_path = plugin.dir.join(&plugin.manifest.entry);
+    let code = std::fs::read_to_string(&entry_path)?;
+    match plugin.manifest.runtime.as_str() {
+        "rhai" => exec_rhai(&code, args),
+        "node" => exec_process("node", &entry_path, args),
+        "python" | "py" => exec_process("python", &entry_path, args),
+        "shell" | "bash" => exec_process("bash", &entry_path, args),
+        other => Err(format!("unsupported runtime: {other}")),
+    }
+}
+```
 
-| 能力 | 格式 | 限制方式 |
-|------|------|----------|
-| HTTP | `http:domain` | 域名匹配 |
-| 文件读 | `file:read:path` | 路径前缀匹配 |
-| 命令执行 | `shell:command` | 精确匹配 |
-| 网络流量 | `network:total:N` | 字节上限 |
-| 执行时间 | `time:max:Ms` | 单次调用时限 |
+> `exec_process` 当前用 `std::process::Command`（阻塞 tokio 线程）。规划改 `tokio::process::Command`（需把 `exec_by_tool_name`/`exec_plugin_tool` 改 async，波及 `chat.rs` 工具分发）。
 
-未声明的能力调用会被 host 函数拒绝并返回错误。
+## 插件配置
+
+`get_plugin_config(name)` 读 `plugins/<name>/config.json`；`set_plugin_config(name, config)` 写入。UI 据 `config_schema` 生成编辑表单。
 
 ## 插件生命周期
 
 ```
-安装 → 验证 Manifest → 加载 WASM → init(config)
-                                     ↓
-                              注册 tools 到 tool-registry
-                                     ↓
-                         对话中 AI 可调用插件工具
-                                     ↓
-                         禁用/卸载 → shutdown() → 卸载 WASM
+扫描 plugins/ → 加载 manifest.json → 注册到全局 registry（once_cell）
+    ↓
+plugin_tools() 合入 builtin_tools() → AI 可见 plugin_{name}:{tool}
+    ↓
+对话中 AI 调用 → exec_by_tool_name → exec_plugin_tool → 子进程/rhai
+    ↓
+toggle_plugin(name, enabled) 启用/禁用
 ```
 
-## 安装
-
-```typescript
-// UI 上传 .wasm + manifest.json
-invoke("plugin_install", { wasmBytes, manifest })
-```
-
-后端校验 manifest 合法性、WASM 模块签名（可选）、权限声明，存入 `plugins` 表与插件目录，加载并注册工具。
+`list_plugins` 命令触发 `scan_plugins()` 重新扫描目录并刷新注册表。
 
 ## 调试
 
-- 插件 `log()` 输出到应用日志面板（`tracing`）
-- `tool_audit_log` 表记录每次工具调用（输入/输出/耗时/状态）
-- 开发模式可热重载：修改 `.wasm` 后自动 reload
-
-## 示例插件
-
-`plugins/` 目录提供参考实现：
-- `calculator` — 纯计算，无权限需求
-- `web-fetch` — 仅需 `http:*` 权限
-- `file-indexer` — 需 `file:read` 权限
-
-详见各插件目录 README。
+- 插件脚本的 stderr 会在工具执行失败时返回给前端（错误横幅）
+- `tool_audit_log` 表可记录每次工具调用（输入/输出/耗时/状态）
+- 修改插件后重新 `list_plugins` 即可刷新

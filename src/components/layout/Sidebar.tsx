@@ -20,8 +20,14 @@ interface SidebarProps {
 
 /** 侧边栏：Agent 列表 + 当前 Agent 的会话列表 + Agent 编辑 */
 export function Sidebar({ ipcOk, onOpenSettings }: SidebarProps) {
-  const { selectedAgent, sidebarTab, setSidebarTab } = useAgentStore();
-  const { conversations, activeId, loadConversations, switchConversation } = useChatStore();
+  const selectedAgent = useAgentStore((s) => s.selectedAgent);
+  const sidebarTab = useAgentStore((s) => s.sidebarTab);
+  const setSidebarTab = useAgentStore((s) => s.setSidebarTab);
+  // 精确订阅：避免订阅 streamingText（每 token 变化）导致侧边栏连同整个会话列表重渲染
+  const conversations = useChatStore((s) => s.conversations);
+  const activeId = useChatStore((s) => s.activeId);
+  const loadConversations = useChatStore((s) => s.loadConversations);
+  const switchConversation = useChatStore((s) => s.switchConversation);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
 

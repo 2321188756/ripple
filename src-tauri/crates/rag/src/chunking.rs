@@ -27,8 +27,8 @@ pub fn chunk_text(text: &str, doc_id: &str, kb_id: &str, config: &ChunkConfig) -
         let para = para.trim();
         if para.is_empty() { continue; }
 
-        // 如果当前块 + 新段落 ≤ chunk_size，追加
-        if current.len() + para.len() + 2 <= config.chunk_size {
+        // 如果当前块 + 新段落 ≤ chunk_size，追加（按字符数比较，CJK 不被字节数高估）
+        if current.chars().count() + para.chars().count() + 2 <= config.chunk_size {
             if !current.is_empty() { current.push_str("\n\n"); }
             current.push_str(para);
         } else {
@@ -37,7 +37,7 @@ pub fn chunk_text(text: &str, doc_id: &str, kb_id: &str, config: &ChunkConfig) -
                 chunks.push(make_chunk(&current, &doc_id, &kb_id, chunks.len()));
             }
             // 新段落作为新块（如果它本身就超长，按行再切）
-            if para.len() > config.chunk_size {
+            if para.chars().count() > config.chunk_size {
                 for line_chunk in split_long_para(para, config) {
                     chunks.push(make_chunk(&line_chunk, &doc_id, &kb_id, chunks.len()));
                 }
@@ -66,7 +66,7 @@ fn split_long_para(para: &str, config: &ChunkConfig) -> Vec<String> {
     let mut result = Vec::new();
     let mut buf = String::new();
     for line in lines {
-        if buf.len() + line.len() + 1 > config.chunk_size {
+        if buf.chars().count() + line.chars().count() + 1 > config.chunk_size {
             result.push(buf.clone());
             buf = line.to_string();
         } else {
@@ -108,7 +108,9 @@ mod tests {
     #[test]
     fn basic_chunking() {
         let text = "Para one.\n\nPara two.\n\nPara three.";
-        let chunks = chunk_text(text, "doc1", "kb1", &ChunkConfig { chunk_size: 50, chunk_overlap: 0 });
+        // chunk_size 15：每段 9~11 字符，第二段起 9+9+2=20 > 15 触发切分，故产生多块。
+        // （早期 chunk_size 50 能装下整段 33 字符，只会产 1 块，与 >=2 断言矛盾。）
+        let chunks = chunk_text(text, "doc1", "kb1", &ChunkConfig { chunk_size: 15, chunk_overlap: 0 });
         assert!(chunks.len() >= 2);
         assert!(chunks[0].content.contains("Para one"));
     }

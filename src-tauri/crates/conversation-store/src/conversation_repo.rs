@@ -9,6 +9,12 @@ use ripple_core::Conversation;
 
 use crate::error::{StoreError, StoreResult};
 
+/// 转义 LIKE 通配符（%、_、\），配合 `ESCAPE '\'` 使用，
+/// 避免用户搜索词中的 %/_ 被当作通配符导致结果过宽。
+fn escape_like(q: &str) -> String {
+    q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+}
+
 pub struct ConversationRepo;
 
 impl ConversationRepo {
@@ -79,8 +85,8 @@ impl ConversationRepo {
     ) -> StoreResult<Vec<Conversation>> {
         let (where_clause, query_params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
             if let Some(q) = search {
-                ("WHERE title LIKE ?1 ORDER BY updated_at DESC LIMIT ?2 OFFSET ?3".into(),
-                 vec![Box::new(format!("%{}%", q)), Box::new(limit as i64), Box::new(offset as i64)])
+                ("WHERE title LIKE ?1 ESCAPE '\\' ORDER BY updated_at DESC LIMIT ?2 OFFSET ?3".into(),
+                 vec![Box::new(format!("%{}%", escape_like(q))), Box::new(limit as i64), Box::new(offset as i64)])
             } else {
                 ("ORDER BY updated_at DESC LIMIT ?1 OFFSET ?2".into(),
                  vec![Box::new(limit as i64), Box::new(offset as i64)])
@@ -126,6 +132,9 @@ impl ConversationRepo {
     }
 
     /// 更新对话
+    ///
+    /// 所有字段更新包在单个事务内，避免半更新导致不一致（如 system_prompt 更新成功
+    /// 而 pinned 失败时部分提交）。
     pub fn update(
         conn: &PooledConnection<SqliteConnectionManager>,
         id: &str,
@@ -137,44 +146,48 @@ impl ConversationRepo {
         provider_id: Option<&str>,
     ) -> StoreResult<Conversation> {
         let now = Utc::now().to_rfc3339();
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
 
         if let Some(v) = title {
-            conn.execute(
+            tx.execute(
                 "UPDATE conversations SET title = ?1, updated_at = ?2 WHERE id = ?3",
                 params![v, now, id],
             ).map_err(|e| StoreError::Database(e.to_string()))?;
         }
         if let Some(v) = system_prompt {
-            conn.execute(
+            tx.execute(
                 "UPDATE conversations SET system_prompt = ?1, updated_at = ?2 WHERE id = ?3",
                 params![v, now, id],
             ).map_err(|e| StoreError::Database(e.to_string()))?;
         }
         if let Some(v) = pinned {
-            conn.execute(
+            tx.execute(
                 "UPDATE conversations SET pinned = ?1, updated_at = ?2 WHERE id = ?3",
                 params![v as i32, now, id],
             ).map_err(|e| StoreError::Database(e.to_string()))?;
         }
         if let Some(v) = archived {
-            conn.execute(
+            tx.execute(
                 "UPDATE conversations SET archived = ?1, updated_at = ?2 WHERE id = ?3",
                 params![v as i32, now, id],
             ).map_err(|e| StoreError::Database(e.to_string()))?;
         }
         if let Some(v) = model_id {
-            conn.execute(
+            tx.execute(
                 "UPDATE conversations SET model_id = ?1, updated_at = ?2 WHERE id = ?3",
                 params![v, now, id],
             ).map_err(|e| StoreError::Database(e.to_string()))?;
         }
         if let Some(v) = provider_id {
-            conn.execute(
+            tx.execute(
                 "UPDATE conversations SET provider_id = ?1, updated_at = ?2 WHERE id = ?3",
                 params![v, now, id],
             ).map_err(|e| StoreError::Database(e.to_string()))?;
         }
 
+        tx.commit().map_err(|e| StoreError::Database(e.to_string()))?;
         Self::get_by_id(conn, id)
     }
 
@@ -200,8 +213,8 @@ impl ConversationRepo {
     ) -> StoreResult<usize> {
         let (sql, param): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
             if let Some(q) = search {
-                ("SELECT COUNT(*) FROM conversations WHERE title LIKE ?1".into(),
-                 vec![Box::new(format!("%{}%", q))])
+                ("SELECT COUNT(*) FROM conversations WHERE title LIKE ?1 ESCAPE '\\'".into(),
+                 vec![Box::new(format!("%{}%", escape_like(q)))])
             } else {
                 ("SELECT COUNT(*) FROM conversations".into(), vec![])
             };

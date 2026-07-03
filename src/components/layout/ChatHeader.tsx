@@ -35,7 +35,8 @@ export function ChatHeader({
   theme,
   onThemeChange,
 }: ChatHeaderProps) {
-  const settings = useSettingsStore();
+  const defaultModel = useSettingsStore((s) => s.defaultModel);
+  const setDefaultModel = useSettingsStore((s) => s.setDefaultModel);
   const CurrentIcon = themeLabels[theme].icon;
 
   const handleExport = async () => {
@@ -113,9 +114,9 @@ export function ChatHeader({
 
       {activeId && (
         <ModelSelector
-          value={hasMessages ? "selected" : settings.defaultModel}
+          value={hasMessages ? "selected" : defaultModel}
           onChange={async (model) => {
-            await settings.setDefaultModel(model);
+            await setDefaultModel(model);
             if (activeId) {
               try {
                 const { conversationService } = await import("@/services");

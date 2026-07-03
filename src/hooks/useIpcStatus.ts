@@ -9,10 +9,12 @@ export function useIpcStatus() {
   const [ipcOk, setIpcOk] = useState<boolean | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     systemService
       .ping()
-      .then(() => setIpcOk(true))
-      .catch(() => setIpcOk(false));
+      .then(() => { if (!cancelled) setIpcOk(true); })
+      .catch(() => { if (!cancelled) setIpcOk(false); });
+    return () => { cancelled = true; };
   }, []);
 
   return ipcOk;

@@ -50,6 +50,14 @@ export interface GenErrorPayload {
   error: string;
 }
 
+// 工具调用事件（chat:tool-call 载荷，对齐后端 commands/chat.rs 的 payload）
+export interface ToolCallEvent {
+  tool_name: string;
+  tool_input: string;
+  tool_output: string;
+  status: "success" | "error";
+}
+
 export interface SearchResult {
   conversation_id: string;
   role: string;
@@ -69,6 +77,15 @@ export interface Agent {
   icon: string;
   created_at: string;
   updated_at: string;
+  // 样式
+  icon_color: string;
+  border_color: string;
+  border_width: number;
+  name_color: string;
+  // 模型参数
+  temperature: number;
+  max_tokens: number;
+  top_p: number;
 }
 
 // 知识库

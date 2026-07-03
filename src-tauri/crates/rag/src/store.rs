@@ -2,7 +2,6 @@
 
 use crate::embedding::{cosine_similarity, Embedding};
 use crate::types::{Chunk, KnowledgeBase, Document, SearchResult};
-use crate::ChunkConfig;
 
 /// 每块最大字符数
 const DEFAULT_CHUNK_SIZE: usize = 1000;
@@ -32,9 +31,12 @@ pub fn list_kbs(conn: &rusqlite::Connection) -> Result<Vec<KnowledgeBase>, Strin
 }
 
 pub fn delete_kb(conn: &rusqlite::Connection, id: &str) -> Result<(), String> {
-    conn.execute("DELETE FROM chunks WHERE kb_id = ?1", [id]).ok();
-    conn.execute("DELETE FROM documents WHERE kb_id = ?1", [id]).ok();
-    conn.execute("DELETE FROM knowledge_bases WHERE id = ?1", [id]).map_err(|e| e.to_string())?;
+    // 事务保证一致性；早期版本用 .ok() 吞错，可能出现 KB 行已删但 chunks/documents 残留。
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM chunks WHERE kb_id = ?1", [id]).map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM documents WHERE kb_id = ?1", [id]).map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM knowledge_bases WHERE id = ?1", [id]).map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -96,11 +98,14 @@ pub fn hybrid_search(
 ) -> Result<Vec<SearchResult>, String> {
     // 1. 加载所有 chunks + embeddings
     let mut sql = "SELECT c.id, c.content, c.embedding_json, c.kb_id, d.file_name, c.metadata FROM chunks c JOIN documents d ON c.doc_id = d.id WHERE c.embedding_json IS NOT NULL".to_string();
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     if let Some(kb) = kb_id {
-        sql.push_str(&format!(" AND c.kb_id = '{}'", kb.replace('\'', "''")));
+        sql.push_str(" AND c.kb_id = ?1");
+        params.push(Box::new(kb.to_string()));
     }
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([], |r| {
+    let rows = stmt.query_map(param_refs.as_slice(), |r| {
         let emb_str: String = r.get::<_, String>(2).ok().unwrap_or_default();
         let emb: Embedding = serde_json::from_str(&emb_str).unwrap_or_default();
         let meta_str: String = r.get::<_, String>(5).unwrap_or_default();
@@ -119,45 +124,46 @@ pub fn hybrid_search(
     vec_results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     vec_results.truncate(top_k * 2); // 多取一些供融合
 
-    // 2. FTS5 关键词搜索
+    // 2. FTS5 关键词搜索（ORDER BY rank = BM25 最佳匹配在前；用结果位置作为 RRF 排名）
     use std::collections::HashMap;
-    let mut fts_scores: HashMap<String, f64> = HashMap::new();
+    let mut fts_rank_pos: HashMap<String, usize> = HashMap::new();
     let mut fts_content: HashMap<String, (String, String, serde_json::Value)> = HashMap::new();
     if let Ok(mut stmt) = conn.prepare(
-        "SELECT c.id, c.content, c.kb_id, d.file_name, c.metadata, rank FROM chunks_fts f JOIN chunks c ON c.rowid = f.rowid JOIN documents d ON c.doc_id = d.id WHERE chunks_fts MATCH ?1"
+        "SELECT c.id, c.content, c.kb_id, d.file_name, c.metadata FROM chunks_fts f JOIN chunks c ON c.rowid = f.rowid JOIN documents d ON c.doc_id = d.id WHERE chunks_fts MATCH ?1 ORDER BY rank LIMIT ?2"
     ) {
-        if let Ok(rows) = stmt.query_map([query_text], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, f64>(5)?))
+        if let Ok(rows) = stmt.query_map(rusqlite::params![query_text, (top_k * 2) as i64], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?))
         }) {
-            for row in rows.flatten() {
-                let (id, content, kb, doc_name, meta_str, rank) = row;
+            for (pos, row) in rows.flatten().enumerate() {
+                let (id, content, _kb, doc_name, meta_str) = row;
                 let meta: serde_json::Value = serde_json::from_str(&meta_str).unwrap_or_default();
-                fts_scores.insert(id.clone(), -(rank as f64)); // rank 越小越好，取反
+                fts_rank_pos.insert(id.clone(), pos);
                 fts_content.insert(id, (content, doc_name, meta));
             }
         }
     }
 
     // 3. RRF 融合
+    // 注意：必须用 FTS 结果的「排名位置」参与 RRF。早期版本存的是 -(rank as f64)，
+    // 而 FTS5 BM25 的 rank 是负数（越负越好），再 `(-fts_r) as usize` 会把负浮点饱和为 0，
+    // 导致所有 FTS 命中拿到相同 RRF 贡献，关键词排序信号完全丢失。
     let k = 60.0;
     let mut rr_fused: Vec<(f64, String, String, String, String, serde_json::Value)> = Vec::new();
 
     // 向量结果给 RRF 分数
-    for (i, (score, id, content, kb, doc_name, meta)) in vec_results.iter().enumerate() {
+    for (i, (_score, id, content, kb, doc_name, meta)) in vec_results.iter().enumerate() {
         let mut rrf = 1.0 / (k + i as f64 + 1.0);
-        if let Some(&fts_r) = fts_scores.get(id) {
-            // FTS 排名取反作为 RRF rank
-            let fts_rank = (-fts_r) as usize;
-            rrf += 1.0 / (k + fts_rank as f64 + 1.0);
+        if let Some(&pos) = fts_rank_pos.get(id) {
+            rrf += 1.0 / (k + pos as f64 + 1.0);
         }
         rr_fused.push((rrf, id.clone(), content.clone(), kb.clone(), doc_name.clone(), meta.clone()));
     }
 
     // 只出现在 FTS 中但不在向量结果中的也要加入
-    for (id, &fts_score) in &fts_scores {
+    for (id, &pos) in &fts_rank_pos {
         if !rr_fused.iter().any(|(_, rid, _, _, _, _)| rid == id) {
             if let Some((content, doc_name, meta)) = fts_content.get(id) {
-                rr_fused.push((1.0 / (k + (-fts_score as f64) + 1.0), id.clone(), content.clone(), "".into(), doc_name.clone(), meta.clone()));
+                rr_fused.push((1.0 / (k + pos as f64 + 1.0), id.clone(), content.clone(), "".into(), doc_name.clone(), meta.clone()));
             }
         }
     }

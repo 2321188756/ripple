@@ -193,3 +193,153 @@ pub async fn search_kb(
     let conn = state.db.get_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
     store::hybrid_search(&conn, &query_emb, &query, kb_id.as_deref(), top_k.unwrap_or(5))
 }
+
+/// 递归导入文件夹中的所有文档
+#[tauri::command]
+pub async fn import_folder(
+    state: State<'_, AppState>,
+    kb_id: String,
+    folder_path: String,
+    api_key: String,
+    api_base_url: Option<String>,
+    embedding_model: Option<String>,
+) -> Result<Vec<ripple_rag::Document>, String> {
+    let base_url = api_base_url.filter(|s| !s.is_empty()).unwrap_or_else(|| "http://192.168.0.123:3000/v1".into());
+    let model = embedding_model.unwrap_or_else(|| "Qwen/Qwen3-Embedding-8B".into());
+    let client = EmbeddingClient::new(&base_url, &api_key, &model);
+
+    let mut results = Vec::new();
+    let mut entries = Vec::new();
+
+    // 递归收集文件
+    collect_files(&folder_path, &mut entries).map_err(|e| format!("scan folder: {e}"))?;
+    if entries.is_empty() {
+        return Err("No supported files found in the folder".into());
+    }
+
+    let conn = state.db.get_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
+
+    for file_path in &entries {
+        let content = match std::fs::read_to_string(file_path) {
+            Ok(c) => c,
+            Err(e) => { tracing::warn!(file = %file_path, "skip read: {e}"); continue; }
+        };
+
+        let file_name = std::path::Path::new(file_path)
+            .file_name().map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".into());
+        let file_type = std::path::Path::new(file_path)
+            .extension().map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "txt".into());
+
+        let doc = match store::insert_document(&conn, &kb_id, &file_name, &file_type) {
+            Ok(d) => d,
+            Err(e) => { tracing::warn!(file = %file_path, "insert: {e}"); continue; }
+        };
+        let _ = store::update_doc_status(&conn, &doc.id, "indexing");
+
+        let chunks = ripple_rag::chunk_text(&content, &doc.id, &kb_id, &ChunkConfig::default());
+        let count = chunks.len();
+        let mut embedding_vec = Vec::with_capacity(count);
+        let mut embed_failed = false;
+        for batch in chunks.chunks(10) {
+            let texts: Vec<String> = batch.iter().map(|c| c.content.clone()).collect();
+            match client.embed_batch(&texts.iter().map(|s| s.as_str()).collect::<Vec<_>>()).await {
+                Ok(embs) => embedding_vec.extend(embs),
+                Err(e) => {
+                    // 关键：批次失败必须中止整篇文档。早期版本此处 `continue` 仅跳过该批，
+                    // 后续批次仍会追加，导致 embedding_vec 长度 < chunks 长度，
+                    // store_chunks_with_embeddings 的 zip 会把后续向量错配到前面的 chunk，
+                    // 文档却仍标记 ready —— 静默数据损坏。
+                    tracing::warn!(file = %file_path, "embed failed, aborting doc: {e}");
+                    embed_failed = true;
+                    break;
+                }
+            }
+        }
+        if embed_failed {
+            let _ = store::update_doc_status(&conn, &doc.id, "error");
+            continue;
+        }
+
+        if let Err(e) = store::store_chunks_with_embeddings(&conn, chunks, embedding_vec) {
+            tracing::warn!(file = %file_path, "store chunks: {e}");
+            let _ = store::update_doc_status(&conn, &doc.id, "error");
+            continue;
+        }
+        let _ = store::update_doc_status(&conn, &doc.id, "ready");
+        tracing::info!(count, file = %file_name, "imported");
+        results.push(doc);
+    }
+
+    Ok(results)
+}
+
+fn collect_files(dir: &str, entries: &mut Vec<String>) -> Result<(), String> {
+    let allowed = ["txt", "md", "pdf", "rs", "py", "js", "ts"];
+    let dir = std::path::Path::new(dir);
+    if !dir.is_dir() {
+        return Err("not a directory".into());
+    }
+    for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files(&path.to_string_lossy(), entries)?;
+        } else if let Some(ext) = path.extension() {
+            if allowed.contains(&ext.to_string_lossy().as_ref()) {
+                entries.push(path.to_string_lossy().to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 批量删除文档
+#[tauri::command]
+pub async fn batch_delete_documents(state: State<'_, AppState>, ids: Vec<String>) -> Result<(), String> {
+    if ids.is_empty() { return Ok(()); }
+    let conn = state.db.get_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
+
+    // 生成占位符 (?1,?2,...)
+    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
+    let sql = format!("DELETE FROM chunks WHERE doc_id IN ({})", placeholders.join(","));
+    let params: Vec<&dyn rusqlite::types::ToSql> = ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+    conn.execute(&sql, params.as_slice()).map_err(|e| e.to_string())?;
+
+    let sql = format!("DELETE FROM documents WHERE id IN ({})", placeholders.join(","));
+    conn.execute(&sql, params.as_slice()).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// 重命名文档
+#[tauri::command]
+pub async fn rename_document(
+    state: State<'_, AppState>,
+    id: String,
+    new_name: String,
+) -> Result<ripple_rag::Document, String> {
+    let conn = state.db.get_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
+
+    let new_ext = std::path::Path::new(&new_name)
+        .extension().map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "txt".into());
+    conn.execute(
+        "UPDATE documents SET file_name = ?1, file_type = ?2 WHERE id = ?3",
+        rusqlite::params![new_name, new_ext, id],
+    ).map_err(|e| e.to_string())?;
+
+    let mut stmt = conn.prepare("SELECT id, kb_id, file_name, file_type, status, created_at FROM documents WHERE id = ?1")
+        .map_err(|e| e.to_string())?;
+    stmt.query_row([&id], |r| {
+        Ok(ripple_rag::Document {
+            id: r.get(0)?,
+            kb_id: r.get(1)?,
+            file_name: r.get(2)?,
+            file_type: r.get(3)?,
+            status: r.get(4)?,
+            created_at: r.get(5)?,
+        })
+    }).map_err(|e| format!("doc not found: {e}"))
+}

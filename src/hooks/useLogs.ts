@@ -17,7 +17,7 @@ export function useLogs(active: boolean, pollInterval: number = LOG_POLL_INTERVA
       ? el.scrollHeight - el.scrollTop - el.clientHeight < 50
       : true;
     try {
-      const lines = await logService.getLogs(200);
+      const lines = await logService.getLogs(500);
       setLogLines(lines);
     } catch (e) {
       setLogLines([`[error: ${e}]`]);

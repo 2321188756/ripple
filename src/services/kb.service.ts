@@ -26,8 +26,29 @@ export const kbService = {
       ...params,
     }),
 
+  /** 递归导入文件夹中所有支持的文件 */
+  importFolder: (params: {
+    kbId: string;
+    folderPath: string;
+    apiKey: string;
+    apiBaseUrl: string;
+    embeddingModel?: string;
+  }): Promise<Document[]> =>
+    invoke<Document[]>("import_folder", {
+      embeddingModel: "Qwen/Qwen3-Embedding-8B",
+      ...params,
+    }),
+
   deleteDoc: (id: string): Promise<void> =>
     invoke<void>("delete_document", { id }),
+
+  /** 批量删除文档 */
+  batchDeleteDocs: (ids: string[]): Promise<void> =>
+    invoke<void>("batch_delete_documents", { ids }),
+
+  /** 重命名文档 */
+  renameDoc: (id: string, newName: string): Promise<Document> =>
+    invoke<Document>("rename_document", { id, newName }),
 
   getDocContent: (id: string): Promise<string> =>
     invoke<string>("get_document_content", { id }),

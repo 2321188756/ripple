@@ -274,12 +274,22 @@ fn message_to_json(msg: &ChatMessage) -> serde_json::Value {
             ContentBlock::ToolResult { tool_call_id, content } => {
                 tool_result = Some((tool_call_id.clone(), content.clone()));
             }
+            ContentBlock::Image { url, detail } => {
+                content_parts.push(serde_json::json!({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": url,
+                        "detail": detail.as_deref().unwrap_or("auto")
+                    }
+                }));
+            }
             _ => {}
         }
     }
 
+    let has_images = content_parts.iter().any(|v| v.get("type").and_then(|t| t.as_str()) == Some("image_url"));
+
     if role == "tool" {
-        // Tool role: content is string, with tool_call_id
         let (tool_call_id, content) = tool_result.unwrap_or_default();
         return serde_json::json!({
             "role": "tool",
@@ -289,7 +299,6 @@ fn message_to_json(msg: &ChatMessage) -> serde_json::Value {
     }
 
     if !tool_calls.is_empty() {
-        // Assistant role with tool_calls
         let content_str: String = content_parts.iter()
             .filter_map(|v| v.get("text").and_then(|t| t.as_str()))
             .collect();
@@ -298,6 +307,11 @@ fn message_to_json(msg: &ChatMessage) -> serde_json::Value {
             "content": if content_parts.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(content_str) },
             "tool_calls": tool_calls
         });
+    }
+
+    // 有图片 → content 为数组；纯文本 → content 为字符串
+    if has_images {
+        return serde_json::json!({ "role": role, "content": content_parts });
     }
 
     // Default: plain text
@@ -314,26 +328,28 @@ fn map_non_stream_response(resp: ChatCompletionResponse, model: &str) -> ChatRes
     let content = choice
         .as_ref()
         .map(|c| {
-            if c.message.content.is_empty() {
-                c.message
-                    .tool_calls
-                    .iter()
-                    .map(|tc| ContentBlock::ToolCall {
-                        id: tc.id.clone(),
-                        name: tc.function.name.clone(),
-                        arguments: tc
-                            .function
-                            .arguments
-                            .as_ref()
-                            .and_then(|a| serde_json::from_str(a).ok())
-                            .unwrap_or(serde_json::Value::Null),
-                    })
-                    .collect::<Vec<_>>()
-            } else {
-                vec![ContentBlock::Text {
+            let mut blocks: Vec<ContentBlock> = Vec::new();
+            // 文本内容（可能为空）
+            if !c.message.content.is_empty() {
+                blocks.push(ContentBlock::Text {
                     text: c.message.content.clone(),
-                }]
+                });
             }
+            // 工具调用：早期版本在 content 非空时走 else 分支只产出 Text，丢弃了 tool_calls。
+            // 但 OpenAI 常同时返回文本内容与工具调用，导致非流式工具调用丢失。
+            for tc in &c.message.tool_calls {
+                blocks.push(ContentBlock::ToolCall {
+                    id: tc.id.clone(),
+                    name: tc.function.name.clone(),
+                    arguments: tc
+                        .function
+                        .arguments
+                        .as_ref()
+                        .and_then(|a| serde_json::from_str(a).ok())
+                        .unwrap_or(serde_json::Value::Null),
+                });
+            }
+            blocks
         })
         .unwrap_or_default();
 

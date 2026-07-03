@@ -1,33 +1,10 @@
-# === Sensitive Data ===
-ripple.db
-logs/
-*.log
-
-# === Build Artifacts ===
 node_modules/
 dist/
-src-tauri/target/
-
-# === IDE ===
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# === OS ===
+logs/
+ripple.db
+ripple.db-shm
+ripple.db-wal
+*.log
 .DS_Store
 Thumbs.db
-
-# === Docs (internal) ===
-docs/
-
-# === Env ===
-.env
-.env.local
-
-# === Tauri generated ===
-src-tauri/gen/
-
-
-# === Plugins (user-installed) ===
-plugins/*/config.json
+src-tauri/target/

@@ -7,6 +7,7 @@ export interface SendMessageParams {
   apiBaseUrl: string;
   model: string;
   agentMode: boolean;
+  images?: string[];
 }
 
 export const chatService = {
@@ -17,4 +18,23 @@ export const chatService = {
   /** 停止当前对话的流式生成 */
   stop: (conversationId: string): Promise<void> =>
     invoke<void>("stop_generation", { conversationId }),
+
+  /** 重生成：删除指定消息之后的内容，重新生成 */
+  regenerate: (params: {
+    conversationId: string;
+    messageId: string;
+    apiKey: string;
+    apiBaseUrl: string;
+    model?: string;
+    agentMode?: boolean;
+  }): Promise<string> =>
+    invokeWithTimeout<string>("regenerate", params as unknown as Record<string, unknown>),
+
+  /** 更新消息内容 */
+  updateMsg: (id: string, content: string): Promise<void> =>
+    invoke<void>("update_message", { id, content }),
+
+  /** 删除消息及之后所有消息 */
+  deleteMsgFrom: (conversationId: string, fromMessageId: string): Promise<void> =>
+    invoke<void>("delete_messages_from", { conversationId, fromMessageId }),
 };

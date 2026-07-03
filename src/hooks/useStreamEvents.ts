@@ -5,6 +5,7 @@ import type {
   StreamChunkPayload,
   GenCompletePayload,
   GenErrorPayload,
+  ToolCallEvent,
 } from "@/types";
 
 /**
@@ -20,9 +21,9 @@ export function useStreamEvents() {
       useChatStore.getState().finalizeStreaming(e.payload),
     );
     const un3 = listen<GenErrorPayload>("chat:gen-error", (e) =>
-      useChatStore.getState().setError(e.payload.error),
+      useChatStore.getState().handleStreamError(e.payload),
     );
-    const un4 = listen<any>("chat:tool-call", (e) => {
+    const un4 = listen<ToolCallEvent>("chat:tool-call", (e) => {
       const store = useChatStore.getState();
       if (store.activeId) store.addToolEvent(store.activeId, e.payload);
     });

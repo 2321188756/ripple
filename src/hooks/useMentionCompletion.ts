@@ -55,9 +55,14 @@ export function useMentionCompletion(items: MentionItem[]) {
   const handleKeyDown = (e: React.KeyboardEvent): boolean => {
     if (!showMention) return false;
     if (e.key === "Enter") {
-      e.preventDefault();
-      if (filtered[mentionIdx]) return true; // 由调用方触发 selectMention
-      return true;
+      if (filtered[mentionIdx]) {
+        e.preventDefault();
+        return true; // 由调用方触发 selectMention
+      }
+      // 补全打开但无匹配项：关闭补全并放行 Enter，让调用方走发送逻辑
+      // （早期版本此处也 return true，导致 @不存在的词 后 Enter 无反应）
+      setShowMention(false);
+      return false;
     }
     if (e.key === "ArrowDown") {
       e.preventDefault();

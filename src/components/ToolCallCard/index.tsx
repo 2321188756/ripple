@@ -2,13 +2,7 @@ import { useState } from "react";
 import { ChevronDown, Check, AlertCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-
-interface ToolCallEvent {
-  tool_name: string;
-  tool_input: string;
-  tool_output: string;
-  status: "success" | "error";
-}
+import type { ToolCallEvent } from "@/types";
 
 /** 工具调用卡片：可折叠，显示工具名/状态/输入/输出 */
 export default function ToolCallCard({ event }: { event: ToolCallEvent }) {

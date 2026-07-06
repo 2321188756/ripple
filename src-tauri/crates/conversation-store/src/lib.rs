@@ -4,6 +4,7 @@
 
 mod db;
 mod error;
+mod memory_repo;
 mod message_repo;
 mod migration;
 
@@ -11,6 +12,7 @@ pub mod conversation_repo;
 
 pub use db::{init_db, DbPool};
 pub use error::{StoreError, StoreResult};
+pub use memory_repo::{MemoryChunk, MemoryFileMeta, MemoryRepo};
 pub use message_repo::{MessageRepo, SearchResult};
 
 #[cfg(test)]

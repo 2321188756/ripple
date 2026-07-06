@@ -55,7 +55,18 @@ export interface ToolCallEvent {
   tool_name: string;
   tool_input: string;
   tool_output: string;
-  status: "success" | "error";
+  status: "success" | "error" | "rejected";
+}
+
+// 工具审批请求（chat:tool-approval-request 载荷）
+// requires_approval 的工具执行前，后端 emit 此事件，前端弹审批框，用户决定后调 approve_tool_call 回传。
+export interface ApprovalRequestEvent {
+  request_id: string;
+  conversation_id: string;
+  tool_name: string;
+  arguments: unknown;
+  /** Agent 当前权限级别：strict(每次问) / elevated(可信任积累) / full(全放行)。决定是否显示「信任此工具」复选框。 */
+  permission_level: string;
 }
 
 export interface SearchResult {
@@ -105,6 +116,20 @@ export interface Document {
   file_type: string;
   status: string;
   created_at: string;
+}
+
+// 记忆系统
+export interface MemoryFileMeta {
+  file_path: string;
+  file_hash: string;
+  chunk_count: number;
+  updated_at: string;
+}
+
+export interface MemoryStats {
+  file_count: number;
+  total_chunks: number;
+  files: MemoryFileMeta[];
 }
 
 // 用量统计

@@ -53,14 +53,33 @@ impl OpenAiProvider {
         Self::new(provider_id, display_name, base_url)
     }
 
-    fn auth_headers(&self, api_key: &str) -> HeaderMap {
+    /// 用外部传入的共享 `reqwest::Client` 构造（连接池复用，避免每请求新建 client）。
+    pub fn with_client(
+        provider_id: &str,
+        display_name: &str,
+        base_url: &str,
+        client: reqwest::Client,
+    ) -> Self {
+        Self {
+            client,
+            provider_id: provider_id.into(),
+            display_name: display_name.into(),
+            base_url: base_url.into(),
+        }
+    }
+
+    fn auth_headers(&self, api_key: &str) -> ProviderResult<HeaderMap> {
         let mut h = HeaderMap::new();
-        h.insert(
-            header::AUTHORIZATION,
-            header::HeaderValue::from_str(&format!("Bearer {api_key}"))
-                .unwrap_or_else(|_| header::HeaderValue::from_static("")),
-        );
-        h
+        // 非 ASCII 字符（如粘贴时夹带的隐藏 unicode）会让 from_str 失败。
+        // 早期版本静默回退为空 header → 神秘 401；这里改为返回明确错误。
+        let value = header::HeaderValue::from_str(&format!("Bearer {api_key}"))
+            .map_err(|_| {
+                ProviderError::Unsupported(
+                    "API key contains invalid (non-ASCII) characters".into(),
+                )
+            })?;
+        h.insert(header::AUTHORIZATION, value);
+        Ok(h)
     }
 
     fn endpoint(&self, path: &str) -> String {
@@ -79,10 +98,11 @@ impl ModelProvider for OpenAiProvider {
     }
 
     async fn list_models(&self, api_key: &str) -> ProviderResult<Vec<ModelInfo>> {
+        let headers = self.auth_headers(api_key)?;
         let resp = ptry!(
             self.client
                 .get(self.endpoint("/models"))
-                .headers(self.auth_headers(api_key))
+                .headers(headers)
                 .send()
                 .await
         );
@@ -111,10 +131,11 @@ impl ModelProvider for OpenAiProvider {
 
     async fn chat(&self, api_key: &str, request: ChatRequest) -> ProviderResult<ChatResponse> {
         let body = build_request_body(&request, false);
+        let headers = self.auth_headers(api_key)?;
         let resp = ptry!(
             self.client
                 .post(self.endpoint("/chat/completions"))
-                .headers(self.auth_headers(api_key))
+                .headers(headers)
                 .json(&body)
                 .send()
                 .await
@@ -132,10 +153,11 @@ impl ModelProvider for OpenAiProvider {
 
     async fn chat_stream(&self, api_key: &str, request: ChatRequest) -> ProviderResult<ChunkStream> {
         let body = build_request_body(&request, true);
+        let headers = self.auth_headers(api_key)?;
         let resp = ptry!(
             self.client
                 .post(self.endpoint("/chat/completions"))
-                .headers(self.auth_headers(api_key))
+                .headers(headers)
                 .json(&body)
                 .send()
                 .await
@@ -242,12 +264,18 @@ fn build_request_body(request: &ChatRequest, stream: bool) -> serde_json::Value 
                     })
                     .collect(),
             );
+            // 显式 tool_choice: auto。部分 OpenAI 兼容端点（newapi 转发的非 OpenAI 模型）
+            // 不默认 auto，不显式指定则模型可能完全不调用工具。
+            body["tool_choice"] = serde_json::json!("auto");
         }
     }
     // 流式时请求 usage 回传
     if stream {
         body["stream_options"] = serde_json::json!({ "include_usage": true });
     }
+
+    // debug 模式下记录完整请求体。filter=info 时 tracing 不求值参数，零开销。
+    tracing::debug!(body = %serde_json::to_string(&body).unwrap_or_default(), "request body");
 
     body
 }

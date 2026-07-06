@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use crate::state::AppState;
-use ripple_rag::{embedding::EmbeddingClient, store, ChunkConfig};
+use ripple_rag::{embedding::EmbeddingClient, read_file_content, store, ChunkConfig};
 use tauri::State;
 
 #[tauri::command]
@@ -47,9 +47,8 @@ pub async fn import_document(
     let base_url = api_base_url.filter(|s| !s.is_empty()).unwrap_or_else(|| "http://192.168.0.123:3000/v1".into());
     let model = embedding_model.unwrap_or_else(|| "Qwen/Qwen3-Embedding-8B".into());
 
-    // 读取文件
-    let content = std::fs::read_to_string(&file_path)
-        .map_err(|e| format!("read file: {e}"))?;
+    // 读取文件（PDF 用 pdf-extract 提取，其他直接 read_to_string）
+    let content = read_file_content(&file_path)?;
     let file_name = std::path::Path::new(&file_path)
         .file_name().map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".into());
@@ -61,7 +60,7 @@ pub async fn import_document(
     let doc = store::insert_document(&conn, &kb_id, &file_name, &file_type)?;
     store::update_doc_status(&conn, &doc.id, "indexing")?;
 
-    let client = EmbeddingClient::new(&base_url, &api_key, &model);
+    let client = EmbeddingClient::new(&base_url, &api_key, &model)?;
 
     // 分块
     let chunks = ripple_rag::chunk_text(&content, &doc.id, &kb_id, &ChunkConfig::default());
@@ -90,8 +89,10 @@ pub async fn import_document(
 #[tauri::command]
 pub async fn delete_document(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let conn = state.db.get_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM chunks WHERE doc_id=?1", [&id]).map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM documents WHERE id=?1", [&id]).map_err(|e| e.to_string())?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM chunks WHERE doc_id=?1", [&id]).map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM documents WHERE id=?1", [&id]).map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -125,7 +126,7 @@ pub async fn update_document_content(
 
     store::update_doc_status(&conn, &id, "indexing")?;
 
-    let client = EmbeddingClient::new(&base_url, &api_key, &model);
+    let client = EmbeddingClient::new(&base_url, &api_key, &model)?;
 
     // 分块
     let chunks = ripple_rag::chunk_text(&content, &id, &kb_id, &ChunkConfig::default());
@@ -187,7 +188,7 @@ pub async fn search_kb(
     let base_url = api_base_url.filter(|s| !s.is_empty()).unwrap_or_else(|| "http://192.168.0.123:3000/v1".into());
     let model = embedding_model.unwrap_or_else(|| "Qwen/Qwen3-Embedding-8B".into());
 
-    let client = EmbeddingClient::new(&base_url, &api_key, &model);
+    let client = EmbeddingClient::new(&base_url, &api_key, &model)?;
     let query_emb = client.embed(&query).await?;
 
     let conn = state.db.get_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
@@ -206,7 +207,7 @@ pub async fn import_folder(
 ) -> Result<Vec<ripple_rag::Document>, String> {
     let base_url = api_base_url.filter(|s| !s.is_empty()).unwrap_or_else(|| "http://192.168.0.123:3000/v1".into());
     let model = embedding_model.unwrap_or_else(|| "Qwen/Qwen3-Embedding-8B".into());
-    let client = EmbeddingClient::new(&base_url, &api_key, &model);
+    let client = EmbeddingClient::new(&base_url, &api_key, &model)?;
 
     let mut results = Vec::new();
     let mut entries = Vec::new();
@@ -220,7 +221,7 @@ pub async fn import_folder(
     let conn = state.db.get_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
 
     for file_path in &entries {
-        let content = match std::fs::read_to_string(file_path) {
+        let content = match read_file_content(file_path) {
             Ok(c) => c,
             Err(e) => { tracing::warn!(file = %file_path, "skip read: {e}"); continue; }
         };
@@ -300,16 +301,15 @@ fn collect_files(dir: &str, entries: &mut Vec<String>) -> Result<(), String> {
 pub async fn batch_delete_documents(state: State<'_, AppState>, ids: Vec<String>) -> Result<(), String> {
     if ids.is_empty() { return Ok(()); }
     let conn = state.db.get_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
 
-    // 生成占位符 (?1,?2,...)
     let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
-    let sql = format!("DELETE FROM chunks WHERE doc_id IN ({})", placeholders.join(","));
     let params: Vec<&dyn rusqlite::types::ToSql> = ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
-    conn.execute(&sql, params.as_slice()).map_err(|e| e.to_string())?;
+    tx.execute(&format!("DELETE FROM chunks WHERE doc_id IN ({})", placeholders.join(",")), params.as_slice()).map_err(|e| e.to_string())?;
 
-    let sql = format!("DELETE FROM documents WHERE id IN ({})", placeholders.join(","));
-    conn.execute(&sql, params.as_slice()).map_err(|e| e.to_string())?;
+    tx.execute(&format!("DELETE FROM documents WHERE id IN ({})", placeholders.join(",")), params.as_slice()).map_err(|e| e.to_string())?;
 
+    tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
 

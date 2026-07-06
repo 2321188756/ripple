@@ -1,7 +1,6 @@
 //! 日志管理命令：前端写入日志、读取日志。
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 /// 全局日志文件路径（由 setup 时设置）

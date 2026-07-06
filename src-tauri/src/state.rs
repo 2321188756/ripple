@@ -23,4 +23,7 @@ pub struct AppState {
     pub providers: Arc<ProviderRegistry>,
     pub key_manager: Arc<KeyManager>,
     pub active_streams: Arc<Mutex<HashMap<String, ActiveStream>>>,
+    /// 共享 HTTP 客户端（连接池复用，避免每请求新建 + TLS 握手）。
+    /// reqwest::Client 内部 Arc，clone 廉价。
+    pub http_client: reqwest::Client,
 }

@@ -120,8 +120,9 @@
 | message | get_messages, search_messages, update_message, delete_messages_from |
 | conversation | create_conversation, list_conversations, delete_conversation, get_conversation, update_conversation |
 | export | export_conversation, import_conversation |
+| memory | reindex_memories, list_memory_files, list_all_memory_files, get_memory_file, save_memory_file, delete_memory_file, delete_agent_memory_file, memory_stats, generate_memory_tags, open_memory_dir |
 | settings | get_setting, set_setting |
-| plugins | list_plugins, toggle_plugin, execute_plugin_tool, get_plugin_config, set_plugin_config |
+| plugins | list_plugins, toggle_plugin, execute_plugin_tool, get_plugin_config, set_plugin_config, approve_tool_call, get_agent_permission_level, set_agent_permission_level, list_trusted_tools, revoke_trust |
 | stats | get_usage_stats |
 | log | log_event, get_log_path, get_logs |
 | test | ping, test_chat |

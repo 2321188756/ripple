@@ -8,6 +8,10 @@ export interface SendMessageParams {
   model: string;
   agentMode: boolean;
   images?: string[];
+  temperature?: number;
+  maxTokens?: number;
+  topP?: number;
+  userMessageId: string;
 }
 
 export const chatService = {
@@ -27,6 +31,9 @@ export const chatService = {
     apiBaseUrl: string;
     model?: string;
     agentMode?: boolean;
+    temperature?: number;
+    maxTokens?: number;
+    topP?: number;
   }): Promise<string> =>
     invokeWithTimeout<string>("regenerate", params as unknown as Record<string, unknown>),
 

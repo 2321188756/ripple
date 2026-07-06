@@ -1,0 +1,24 @@
+{
+  "name": "web-search",
+  "version": "1.0.0",
+  "description": "搜索网络，返回标题和链接。使用 DuckDuckGo，无需 API Key。",
+  "author": "Ripple",
+  "runtime": "python",
+  "entry": "search.py",
+  "mode": "tool",
+  "tools": [
+    {
+      "name": "web_search",
+      "description": "搜索网络获取最新信息。AI 在需要实时信息时自动调用。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "搜索关键词，建议用中文" },
+          "max_results": { "type": "integer", "description": "返回结果数（默认 5）", "default": 5 }
+        },
+        "required": ["query"]
+      }
+    }
+  ],
+  "permissions": ["network"]
+}

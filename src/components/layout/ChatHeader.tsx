@@ -1,16 +1,20 @@
-import { Download, Sun, Moon, Monitor } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Download, Sun, Moon, Monitor, Palette, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ModelSelector } from "@/components/common/ModelSelector";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { exportService } from "@/services/export.service";
-import type { Theme } from "@/types/theme";
+import { themeService } from "@/services/theme.service";
+import { openSettingsWindow } from "@/lib/openSettings";
+import type { Theme, ThemeDefinition } from "@/types/theme";
 
 interface ChatHeaderProps {
   activeId: string | null;
@@ -18,6 +22,7 @@ interface ChatHeaderProps {
   onExportError: (msg: string) => void;
   theme: Theme;
   onThemeChange: (t: Theme) => void;
+  onApplyTheme?: (themeDef: ThemeDefinition) => void;
   isDark: boolean;
 }
 
@@ -34,20 +39,26 @@ export function ChatHeader({
   onExportError,
   theme,
   onThemeChange,
+  onApplyTheme,
 }: ChatHeaderProps) {
   const defaultModel = useSettingsStore((s) => s.defaultModel);
   const setDefaultModel = useSettingsStore((s) => s.setDefaultModel);
   const CurrentIcon = themeLabels[theme].icon;
+  const [customThemes, setCustomThemes] = useState<ThemeDefinition[]>([]);
 
-  const handleExport = async () => {
+  useEffect(() => {
+    themeService.list().then(setCustomThemes).catch(() => {});
+  }, []);
+
+  const handleExport = async (format: "markdown" | "json") => {
     if (!activeId) return;
     try {
-      const md = await exportService.exportConversation(activeId, "markdown");
-      const blob = new Blob([md], { type: "text/markdown" });
+      const content = await exportService.exportConversation(activeId, format);
+      const blob = new Blob([content], { type: format === "json" ? "application/json" : "text/markdown" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `chat-${activeId.slice(0, 8)}.md`;
+      a.download = `chat-${activeId.slice(0, 8)}.${format === "json" ? "json" : "md"}`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
@@ -68,20 +79,22 @@ export function ChatHeader({
       <div className="flex-1" />
 
       {activeId && hasMessages && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              onClick={handleExport}
-              aria-label="导出为 Markdown"
-            >
-              <Download className="h-3.5 w-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>导出 Markdown</TooltipContent>
-        </Tooltip>
+        <DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="导出">
+                  <Download className="w-3.5 h-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent>导出</TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent align="end" className="w-36">
+            <DropdownMenuItem onClick={() => handleExport("markdown")}>Markdown</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => handleExport("json")}>JSON（备份用）</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       )}
 
       <DropdownMenu>
@@ -95,7 +108,9 @@ export function ChatHeader({
           </TooltipTrigger>
           <TooltipContent>主题</TooltipContent>
         </Tooltip>
-        <DropdownMenuContent align="end" className="w-32">
+        <DropdownMenuContent align="end" className="w-40">
+          {/* 模式切换 */}
+          <div className="px-2 py-1 text-[10px] text-muted-foreground font-medium">模式</div>
           {(Object.entries(themeLabels) as [Theme, typeof themeLabels["light"]][]).map(
             ([key, { label, icon: Icon }]) => (
               <DropdownMenuItem
@@ -109,12 +124,26 @@ export function ChatHeader({
               </DropdownMenuItem>
             ),
           )}
+          <DropdownMenuSeparator />
+          {/* 自定义主题 */}
+          <div className="px-2 py-1 text-[10px] text-muted-foreground font-medium">主题配色</div>
+          {customThemes.map((t) => (
+            <DropdownMenuItem key={t.id} onClick={() => onApplyTheme?.(t)} className="text-xs gap-2">
+              <Palette className="w-3.5 h-3.5" />
+              {t.name}
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={openSettingsWindow} className="text-xs gap-2 text-muted-foreground">
+            <Settings className="w-3.5 h-3.5" />
+            管理主题
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
 
       {activeId && (
         <ModelSelector
-          value={hasMessages ? "selected" : defaultModel}
+          value={defaultModel}
           onChange={async (model) => {
             await setDefaultModel(model);
             if (activeId) {

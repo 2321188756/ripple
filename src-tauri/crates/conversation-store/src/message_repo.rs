@@ -186,24 +186,19 @@ impl MessageRepo {
         conversation_id: &str,
         from_message_id: &str,
     ) -> StoreResult<()> {
-        let base_created: String = conn
-            .query_row(
-                "SELECT created_at FROM messages WHERE id = ?1 AND conversation_id = ?2",
-                params![from_message_id, conversation_id],
-                |r| r.get(0),
+        // 删除该消息及之后所有消息。先查 rowid，不存在则无操作（可能已被删）。
+        let rowid: Option<i64> = conn.query_row(
+            "SELECT rowid FROM messages WHERE id = ?1 AND conversation_id = ?2",
+            params![from_message_id, conversation_id],
+            |r| r.get(0),
+        ).ok();
+        if let Some(base_rowid) = rowid {
+            conn.execute(
+                "DELETE FROM messages WHERE conversation_id = ?1 AND rowid >= ?2",
+                params![conversation_id, base_rowid],
             )
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => {
-                    StoreError::NotFound(format!("message {from_message_id}")
-                )
-                }
-                _ => StoreError::Database(e.to_string()),
-            })?;
-        conn.execute(
-            "DELETE FROM messages WHERE conversation_id = ?1 AND created_at >= ?2",
-            params![conversation_id, base_created],
-        )
-        .map_err(|e| StoreError::Database(e.to_string()))?;
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        }
         Ok(())
     }
 

@@ -83,23 +83,24 @@ export function AgentListView({ selectedAgent, onSelect }: AgentListViewProps) {
           {agents.map((a) => (
             <button key={a.id} onClick={() => onSelect(a)}
               className={cn(
-                "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all duration-150",
+                "w-full flex items-center gap-3 px-3 py-2 text-left transition-all duration-150 border-b border-border/10",
                 selectedAgent?.id === a.id
-                  ? "bg-primary/10 border border-primary/30 shadow-sm"
-                  : "border border-transparent hover:bg-accent/60 hover:border-border",
+                  ? "bg-primary/5"
+                  : "hover:bg-accent/40",
               )}>
-              <div className="h-9 w-9 shrink-0 rounded-full flex items-center justify-center text-base"
+              <div className="h-9 w-9 shrink-0 rounded-full flex items-center justify-center text-base overflow-hidden"
                 style={{
                   backgroundColor: a.icon_color || "#6366f1",
-                  border: `${a.border_width || 3}px solid ${a.border_color || "#6366f1"}`,
+                  border: `${a.border_width || 2}px solid ${a.border_color || "#6366f1"}`,
                 }}>
-                {a.icon || "🤖"}
+                {a.icon?.startsWith("data:image") ? (
+                  <img src={a.icon} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  a.icon || "🤖"
+                )}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium truncate" style={{ color: a.name_color || undefined }}>{a.name}</div>
-                <div className="text-[11px] text-muted-foreground truncate mt-0.5">
-                  {a.description || a.system_prompt?.slice(0, 40) || "点击选择此 Agent"}
-                </div>
               </div>
               {selectedAgent?.id === a.id && (
                 <div className="w-2 h-2 rounded-full bg-primary shrink-0" />

@@ -20,7 +20,6 @@ export default defineConfig({
       output: {
         // 拆分大依赖为独立 chunk，便于并行加载与缓存命中，首屏不再解析单个 1.5MB 主包
         manualChunks: {
-          "react-vendor": ["react", "react-dom"],
           "radix-vendor": [
             "@radix-ui/react-dialog",
             "@radix-ui/react-dropdown-menu",

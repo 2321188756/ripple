@@ -1,10 +1,8 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import { X } from "lucide-react";
 import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Button } from "@/components/ui/button";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useKBStore } from "@/stores/kbStore";
 import { useTheme } from "@/hooks/useTheme";
@@ -14,6 +12,7 @@ import type { SettingsTab } from "@/types/theme";
 const GeneralSettings = lazy(() => import("./GeneralSettings").then((m) => ({ default: m.GeneralSettings })));
 const LogsPanel = lazy(() => import("./LogsPanel").then((m) => ({ default: m.LogsPanel })));
 const KnowledgePanel = lazy(() => import("./KnowledgePanel").then((m) => ({ default: m.KnowledgePanel })));
+const MemoryLabPanel = lazy(() => import("./MemoryLabPanel").then((m) => ({ default: m.MemoryLabPanel })));
 const StatsPanel = lazy(() => import("./StatsPanel").then((m) => ({ default: m.StatsPanel })));
 const PluginsPanel = lazy(() => import("./PluginsPanel").then((m) => ({ default: m.PluginsPanel })));
 
@@ -46,31 +45,22 @@ export function SettingsWindow() {
     return () => window.removeEventListener("keydown", h);
   }, []);
 
-  const close = () => getCurrentWindow().close().catch(() => {});
-
   return (
     <TooltipProvider delayDuration={300}>
       <div className="flex flex-col h-screen bg-background text-foreground">
-        {/* 标题栏：data-tauri-drag-region 让系统原生拖动窗口 */}
-        <div
-          className="flex items-center justify-between px-5 py-3 border-b border-border bg-muted/30"
-          data-tauri-drag-region
-        >
-          <span className="text-sm font-semibold">设置</span>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={close} aria-label="关闭">
-            <X className="w-4 h-4" />
-          </Button>
-        </div>
+        {/* 标题栏：纯拖动区域，关闭由 OS 窗口按钮处理 */}
+        <div className="h-7 border-b border-border shrink-0" data-tauri-drag-region />
 
         <Tabs
           value={tab}
           onValueChange={(v) => setTab(v as SettingsTab)}
           className="flex-1 flex flex-col min-h-0"
         >
-          <div className="px-5 pt-3 pb-0">
+          <div className="px-4 pt-1 pb-0">
             <TabsList className="w-full justify-start gap-1">
               <TabsTrigger value="settings">通用</TabsTrigger>
               <TabsTrigger value="knowledge">知识库</TabsTrigger>
+              <TabsTrigger value="memory">记忆 Lab</TabsTrigger>
               <TabsTrigger value="plugins">插件</TabsTrigger>
               <TabsTrigger value="stats">统计</TabsTrigger>
               <TabsTrigger value="logs">日志</TabsTrigger>
@@ -79,19 +69,22 @@ export function SettingsWindow() {
 
           <div className="flex-1 overflow-hidden">
             <Suspense fallback={<div className="p-5 text-xs text-muted-foreground">加载中...</div>}>
-              <TabsContent value="settings" className="mt-0 h-full overflow-y-auto p-5">
+              <TabsContent value="settings" className="mt-0 h-full overflow-y-auto p-4">
                 <GeneralSettings />
               </TabsContent>
-              <TabsContent value="knowledge" className="mt-0 h-full overflow-y-auto p-5">
+              <TabsContent value="knowledge" className="mt-0 h-full overflow-y-auto p-4">
                 <KnowledgePanel />
               </TabsContent>
-              <TabsContent value="plugins" className="mt-0 h-full overflow-y-auto p-5">
+              <TabsContent value="memory" className="mt-0 h-full overflow-y-auto p-4">
+                <MemoryLabPanel />
+              </TabsContent>
+              <TabsContent value="plugins" className="mt-0 h-full overflow-y-auto p-4">
                 <PluginsPanel />
               </TabsContent>
-              <TabsContent value="stats" className="mt-0 h-full overflow-y-auto p-5">
+              <TabsContent value="stats" className="mt-0 h-full overflow-y-auto p-4">
                 <StatsPanel />
               </TabsContent>
-              <TabsContent value="logs" className="mt-0 h-full flex flex-col min-h-0 p-5">
+              <TabsContent value="logs" className="mt-0 h-full flex flex-col min-h-0 p-4">
                 <LogsPanel active={tab === "logs"} />
               </TabsContent>
             </Suspense>

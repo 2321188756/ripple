@@ -57,16 +57,22 @@
 - [x] 前端性能：原子 selector（消除每 token 全树重渲染）、MessageBubble/MarkdownRenderer memo、Vite manualChunks（主 chunk 1.5MB→161KB）、PrismLight 按需语言、设置面板懒加载、移除 framer-motion 死依赖、toolEvents 类型化
 - [x] 独立设置窗口（OS 原生窗口 + hash 路由 + 跨窗口状态同步 + App 懒加载提速）
 
+### Phase 7：打磨与功能补全（2026-07）
+- [x] 清理预存编译警告（cargo check 零警告）
+- [x] 非 ASCII API Key 返回明确错误（不再静默 401）
+- [x] KnowledgePanel 拆分（488 行 → 主面板 ~290 + 4 子组件），顺带修「打开编辑」菜单 bug
+- [x] reqwest::Client 复用（存 AppState，避免每请求 TLS 握手）
+- [x] 插件 exec_process 改 tokio::process（不阻塞 tokio 线程）
+- [x] ErrorBanner 重试按钮 + EmptyChatPlaceholder 显示当前 Agent
+- [x] PDF 解析（RAG 文档摄入，pdf-extract）
+- [x] 对话 JSON 导入导出（ChatHeader 导出下拉 + GeneralSettings 导入按钮 + 跨窗口刷新）
+
 ---
 
 ## 待实现
 
 ### 近期
-- [ ] 插件 exec_process 改 tokio::process（async，不阻塞 tokio 线程）
-- [ ] reqwest::Client 复用（存 AppState，避免每请求新建 + TLS 握手）
-- [ ] KeyManager 接入 api_keys 表（随机持久化 machine_id，API Key 真正加密出后端）
-- [ ] PDF 解析（RAG 文档摄入，当前 PDF 仅按二进制跳过）
-- [ ] 对话导入（JSON）
+- [ ] **KeyManager 安全硬化**（推荐独立专项）：持久化随机 machine_id（独立文件）、save_api_key/has_api_key 命令、send_message 空时后端解密、前端不再缓存明文、旧版明文 key 迁移。涉及 send_message 契约变更，需谨慎。
 - [ ] service/daemon 插件进程管理（spawn/health check）
 
 ### v2 规划

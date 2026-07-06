@@ -3,7 +3,7 @@
 use std::time::Duration;
 use crate::state::AppState;
 use tauri::State;
-use ripple_core::{Message, MessageRole, ContentBlock};
+use ripple_core::{Message, MessageRole};
 
 #[tauri::command]
 pub async fn export_conversation(state: State<'_, AppState>, id: String, format: Option<String>) -> Result<String, String> {
@@ -42,7 +42,7 @@ pub async fn export_conversation(state: State<'_, AppState>, id: String, format:
             "title": conv.0,
             "created_at": conv.1,
             "messages": msgs.iter().map(|m| serde_json::json!({
-                "role": match m.role { MessageRole::System => "system", MessageRole::User => "user", MessageRole::Assistant => "assistant", MessageRole::Tool => "tool", _ => "user" },
+                "role": match m.role { MessageRole::System => "system", MessageRole::User => "user", MessageRole::Assistant => "assistant", MessageRole::Tool => "tool" },
                 "content": m.text(),
                 "created_at": m.created_at.to_rfc3339(),
             })).collect::<Vec<_>>(),

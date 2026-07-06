@@ -9,6 +9,9 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (3, MIGRATION_003_AGENTS),
     (4, MIGRATION_004_AGENT_STYLE),
     (5, MIGRATION_005_FTS_TRIGGERS),
+    (6, MIGRATION_006_AGENT_MEMORY),
+    (7, MIGRATION_007_MEMORY_TAGS),
+    (8, MIGRATION_008_AGENT_PERMISSIONS),
 ];
 
 /// 001: 初始 schema —— 核心业务表
@@ -236,6 +239,64 @@ CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
 END;
 
 INSERT OR IGNORE INTO schema_version (version) VALUES (5);
+"#;
+
+/// 006: Agent 记忆系统。每条记忆是一个 chunk（来自 dailynote/{agent}/ 下的文件），
+/// 带 embedding_json 向量（cosine 语义检索）+ memories_fts 关键词索引。
+/// 文件 hash 用于增量重建：文件变更时删旧 chunks 重新分块嵌入。
+const MIGRATION_006_AGENT_MEMORY: &str = r#"
+CREATE TABLE IF NOT EXISTS memories (
+    id             TEXT PRIMARY KEY NOT NULL,
+    agent_id       TEXT NOT NULL,
+    file_path      TEXT NOT NULL,          -- 相对路径，如 dailynote/Aemeath/notes.md
+    file_hash      TEXT NOT NULL,          -- SHA256，用于增量重建检测
+    chunk_index    INTEGER NOT NULL,       -- 文件内块序号
+    content        TEXT NOT NULL,          -- 块原文
+    embedding_json TEXT,                   -- Vec<f32> JSON（NULL = 未嵌入）
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_memories_agent ON memories(agent_id);
+CREATE INDEX IF NOT EXISTS idx_memories_file ON memories(file_path);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content);
+
+CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+    INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+    DELETE FROM memories_fts WHERE rowid = old.rowid;
+END;
+CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+    DELETE FROM memories_fts WHERE rowid = old.rowid;
+    INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+
+INSERT OR IGNORE INTO schema_version (version) VALUES (6);
+"#;
+
+/// 007: memories 表加 tags 列（关键词标签，用于不依赖 embedding 的高效 RAG 检索）。
+/// 每条记忆 chunk 索引时自动提取 3-5 个关键词作为 tag，检索时提取 query 关键词匹配 tags。
+const MIGRATION_007_MEMORY_TAGS: &str = r#"
+ALTER TABLE memories ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
+
+INSERT OR IGNORE INTO schema_version (version) VALUES (7);
+"#;
+
+/// 008: Agent 工具权限。permission_level 三档：strict(每次审批) / elevated(可信任积累) / full(全放行)。
+/// agent_trusted_tools 记录 elevated 模式下用户「信任此工具」的工具，后续自动放行，可收回。
+const MIGRATION_008_AGENT_PERMISSIONS: &str = r#"
+ALTER TABLE agents ADD COLUMN permission_level TEXT NOT NULL DEFAULT 'strict';
+
+CREATE TABLE IF NOT EXISTS agent_trusted_tools (
+    agent_id   TEXT NOT NULL,
+    tool_name  TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (agent_id, tool_name)
+);
+
+INSERT OR IGNORE INTO schema_version (version) VALUES (8);
 "#;
 
 /// 运行所有待执行的迁移。

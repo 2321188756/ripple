@@ -7,6 +7,7 @@ import { ChatInputArea } from "@/components/layout/ChatInputArea";
 import { ErrorBanner } from "@/components/layout/ErrorBanner";
 import { VirtualMessageList } from "@/components/chat/VirtualMessageList";
 import { ImagePreview } from "@/components/common/ImagePreview";
+import { ApprovalDialog } from "@/components/common/ApprovalDialog";
 import { openSettingsWindow } from "@/lib/openSettings";
 import { useChatStore } from "@/stores/chatStore";
 import { useAgentStore } from "@/stores/agentStore";
@@ -32,6 +33,8 @@ function App() {
   const sendMessage = useChatStore((s) => s.sendMessage);
   const stopGeneration = useChatStore((s) => s.stopGeneration);
   const clearError = useChatStore((s) => s.clearError);
+  const retry = useChatStore((s) => s.retry);
+  const canRetry = useChatStore((s) => s.lastRequest !== null);
   const toggleAgentMode = useChatStore((s) => s.toggleAgentMode);
   const selectedAgent = useAgentStore((s) => s.selectedAgent);
   const loadAgents = useAgentStore((s) => s.loadAgents);
@@ -41,7 +44,7 @@ function App() {
   const ipcOk = useIpcStatus();
   const [previewImg, setPreviewImg] = useState<string | null>(null);
   useStreamEvents();
-  const { theme, setTheme, isDark } = useTheme();
+  const { theme, setTheme, isDark, applyCustomTheme } = useTheme();
 
   // 初始化
   useEffect(() => {
@@ -55,11 +58,18 @@ function App() {
   // 跨窗口同步：独立设置窗口改动 apiKey/知识库后，通知主窗口刷新缓存
   // （两窗口是独立 JS 上下文，store 不共享）
   useEffect(() => {
-    const un = listen("ripple:settings-changed", () => {
+    const un1 = listen("ripple:settings-changed", () => {
       useSettingsStore.getState().load();
       useKBStore.getState().loadKBs();
     });
-    return () => { un.then((f) => f()); };
+    // 设置窗口导入对话后，刷新会话列表
+    const un2 = listen("ripple:conversations-changed", () => {
+      useChatStore.getState().loadConversations();
+    });
+    return () => {
+      un1.then((f) => f());
+      un2.then((f) => f());
+    };
   }, []);
 
   // Agent 选中时自动开启 agent 模式（仅在「无 agent → 有 agent」首次选中时，
@@ -149,6 +159,7 @@ function App() {
             onExportError={(msg) => useChatStore.getState().setError(msg)}
             theme={theme}
             onThemeChange={setTheme}
+            onApplyTheme={applyCustomTheme}
             isDark={isDark}
           />
 
@@ -156,7 +167,7 @@ function App() {
             messagesEndRef={messagesEndRef}
           />
 
-          <ErrorBanner error={error} onDismiss={clearError} />
+          <ErrorBanner error={error} onDismiss={clearError} onRetry={canRetry ? retry : undefined} />
 
           <ChatInputArea
             streaming={streaming}
@@ -168,6 +179,8 @@ function App() {
         {previewImg && (
           <ImagePreview src={previewImg} onClose={() => setPreviewImg(null)} />
         )}
+
+        <ApprovalDialog />
       </div>
     </TooltipProvider>
   );

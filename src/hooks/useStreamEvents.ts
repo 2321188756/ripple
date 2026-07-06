@@ -6,6 +6,7 @@ import type {
   GenCompletePayload,
   GenErrorPayload,
   ToolCallEvent,
+  ApprovalRequestEvent,
 } from "@/types";
 
 /**
@@ -27,12 +28,16 @@ export function useStreamEvents() {
       const store = useChatStore.getState();
       if (store.activeId) store.addToolEvent(store.activeId, e.payload);
     });
+    const un5 = listen<ApprovalRequestEvent>("chat:tool-approval-request", (e) => {
+      useChatStore.getState().addApprovalRequest(e.payload);
+    });
 
     return () => {
       un1.then((f) => f());
       un2.then((f) => f());
       un3.then((f) => f());
       un4.then((f) => f());
+      un5.then((f) => f());
     };
   }, []);
 }

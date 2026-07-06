@@ -1,0 +1,24 @@
+{
+  "name": "url-fetch",
+  "version": "1.0.0",
+  "description": "获取网页内容并转为纯文本。AI 可用来阅读文章、文档等。",
+  "author": "Ripple",
+  "runtime": "python",
+  "entry": "fetch.py",
+  "mode": "tool",
+  "tools": [
+    {
+      "name": "fetch_url",
+      "description": "获取指定 URL 的网页内容（纯文本）。用于查看文章、文档或在线资料。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string", "description": "要获取的完整 URL（含 https://）" },
+          "max_chars": { "type": "integer", "description": "最多返回字符数（默认 5000）", "default": 5000 }
+        },
+        "required": ["url"]
+      }
+    }
+  ],
+  "permissions": ["network"]
+}

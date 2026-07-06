@@ -2,14 +2,6 @@
 
 use ripple_core::{ChatMessage, ChatRequest, ContentBlock};
 use ripple_model_provider::{ModelProvider, OpenAiProvider};
-use serde::Serialize;
-use tauri::{AppHandle, Emitter};
-
-/// 流式块事件
-#[derive(Clone, Serialize)]
-pub struct TestStreamChunk {
-    pub delta_text: Option<String>,
-}
 
 /// 测试命令：直接调用 newapi，不经过数据库
 #[tauri::command]

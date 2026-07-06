@@ -1,0 +1,33 @@
+{
+  "name": "code-runner",
+  "version": "1.0.0",
+  "description": "执行 python/node 代码并返回输出。AI 可用来计算、验证逻辑、跑脚本片段。每次调用需用户审批（高危）。",
+  "author": "Ripple",
+  "runtime": "python",
+  "entry": "code_runner.py",
+  "mode": "tool",
+  "tools": [
+    {
+      "name": "run_code",
+      "description": "执行代码并返回 stdout/stderr。代码写到临时文件后用对应解释器执行，有超时保护。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "language": { "type": "string", "enum": ["python", "node"], "description": "代码语言" },
+          "code": { "type": "string", "description": "要执行的代码" },
+          "timeout": { "type": "integer", "description": "超时秒数（默认 15）", "default": 15 }
+        },
+        "required": ["language", "code"]
+      }
+    }
+  ],
+  "permissions": ["shell"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "python_cmd": { "type": "string", "description": "python 解释器命令（默认 python）", "default": "python" },
+      "node_cmd": { "type": "string", "description": "node 解释器命令（默认 node）", "default": "node" },
+      "max_output": { "type": "integer", "description": "stdout/stderr 各自最大字符数（默认 10000）", "default": 10000 }
+    }
+  }
+}

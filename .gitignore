@@ -8,3 +8,4 @@ ripple.db-wal
 .DS_Store
 Thumbs.db
 src-tauri/target/
+dailynote/

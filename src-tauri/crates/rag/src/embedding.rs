@@ -18,16 +18,17 @@ pub struct EmbeddingClient {
 }
 
 impl EmbeddingClient {
-    pub fn new(api_base_url: &str, api_key: &str, model: &str) -> Self {
-        Self {
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(60))
-                .build()
-                .expect("reqwest client"),
+    pub fn new(api_base_url: &str, api_key: &str, model: &str) -> Result<Self, String> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .map_err(|e| format!("build reqwest client: {e}"))?;
+        Ok(Self {
+            client,
             api_base_url: api_base_url.trim_end_matches('/').to_string(),
             api_key: api_key.to_string(),
             model: model.to_string(),
-        }
+        })
     }
 
     /// 生成单个文本的嵌入向量

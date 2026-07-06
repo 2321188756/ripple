@@ -20,23 +20,6 @@ pub fn get_conversation_inner(
         .map_err(|e| e.to_string())
 }
 
-pub fn create_conversation_inner(
-    conn: &PooledConnection<SqliteConnectionManager>,
-    provider_id: &str,
-    model_id: &str,
-    title: Option<&str>,
-    system_prompt: Option<&str>,
-) -> Result<Conversation, String> {
-    ripple_conversation_store::conversation_repo::ConversationRepo::create(
-        conn,
-        provider_id,
-        model_id,
-        title,
-        system_prompt,
-    )
-    .map_err(|e| e.to_string())
-}
-
 // ---- Tauri 命令 ----
 
 #[tauri::command]
@@ -69,10 +52,15 @@ pub async fn create_conversation(
     let now = Utc::now().to_rfc3339();
     let id = uuid::Uuid::new_v4().to_string();
     let title_str = title.unwrap_or_else(|| "New Conversation".into());
+    // 默认模型从 settings 读取（前端「默认模型」字段），空则回退 deepseek-v4-flash
+    let default_model: String = conn
+        .query_row("SELECT value FROM settings WHERE key='default_model'", [], |r| r.get::<_, String>(0))
+        .ok().filter(|s: &String| !s.is_empty())
+        .unwrap_or_else(|| "deepseek-v4-flash".into());
     conn.execute(
         "INSERT INTO conversations (id, title, created_at, updated_at, model_id, provider_id, system_prompt, pinned, archived, metadata)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 0, ?8)",
-        rusqlite::params![id, title_str, now, now, model_id.as_deref().unwrap_or("deepseek-v4-flash"), provider_id.as_deref().unwrap_or("newapi"), sys, metadata],
+        rusqlite::params![id, title_str, now, now, model_id.as_deref().unwrap_or(&default_model), provider_id.as_deref().unwrap_or("newapi"), sys, metadata],
     ).map_err(|e| e.to_string())?;
 
     // 直接查返回完整对象

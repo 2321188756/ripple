@@ -26,7 +26,7 @@ export const AUTO_SCROLL_THRESHOLD = 100;
 export const LOG_POLL_INTERVAL = 3000;
 
 /** IPC 默认超时（ms） */
-export const IPC_TIMEOUT = 8000;
+export const IPC_TIMEOUT = 30000;
 
 /** 设置面板 localStorage 键名 */
 export const SETTINGS_PANEL_KEYS = {

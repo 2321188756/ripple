@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { conversationService, messageService, chatService, logService } from "@/services";
+import { invoke } from "@/services/invoke";
 import { useSettingsStore } from "./settingsStore";
 import { useAgentStore } from "./agentStore";
 import type {
@@ -10,9 +11,16 @@ import type {
   GenCompletePayload,
   GenErrorPayload,
   ToolCallEvent,
+  ApprovalRequestEvent,
 } from "@/types";
 
 // ---------- Store ----------
+
+/** 缓存最近一次发送/重生成请求，供错误横幅"重试"使用 */
+type LastRequest =
+  | { type: "send"; content: string; images?: string[]; userMsgId: string; conversationId: string }
+  | { type: "regenerate"; messageId: string; conversationId: string }
+  | null;
 
 interface ChatState {
   conversations: Conversation[];
@@ -26,10 +34,16 @@ interface ChatState {
   error: string | null;
   /** 记住每个 Agent 上次活跃的会话 */
   lastActivePerAgent: Record<string, string>;
+  /** 最近一次请求（send/regenerate），供错误重试 */
+  lastRequest: LastRequest;
+  /** 待审批的工具调用请求（后端 emit chat:tool-approval-request，前端弹框确认） */
+  pendingApprovals: ApprovalRequestEvent[];
 
   setError: (msg: string) => void;
   clearError: () => void;
   addToolEvent: (conversationId: string, event: ToolCallEvent) => void;
+  addApprovalRequest: (req: ApprovalRequestEvent) => void;
+  resolveApproval: (requestId: string, approved: boolean, trustTool: boolean) => Promise<void>;
   toggleAgentMode: () => void;
 
   // actions
@@ -42,6 +56,8 @@ interface ChatState {
   stopGeneration: () => Promise<void>;
   /** 重生成：从指定消息重新生成 */
   regenerate: (messageId: string, conversationId?: string) => Promise<void>;
+  /** 重试最近一次失败的 send/regenerate */
+  retry: () => Promise<void>;
   /** 更新消息内容（编辑后自动后续需手动 regenerate） */
   updateMessage: (messageId: string, content: string) => Promise<void>;
   /** 删除消息及其后所有消息 */
@@ -64,6 +80,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loading: false,
   error: null,
   lastActivePerAgent: {},
+  lastRequest: null,
+  pendingApprovals: [],
 
   loadConversations: async (agentId?: string) => {
     const convos = await conversationService
@@ -91,11 +109,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       await get().stopGeneration();
     }
 
-    set({ activeId: id, streamingText: null, streamingMsgId: null });
-    // 始终后台刷新该对话消息。早期版本命中缓存即 return，导致后端新落库的回复
-    // （流式完成、或切走期间生成的）切回时永远看不到，直到重启。
+    // 先加载消息再切 activeId，避免右侧先闪空状态再出内容的闪烁。
+    // 加载期间右侧仍显示旧对话，加载完成后原子切换。
     const msgs = await messageService.list(id).catch(() => []);
-    set((s) => ({ messages: { ...s.messages, [id]: msgs } }));
+    set({
+      activeId: id,
+      streamingText: null,
+      streamingMsgId: null,
+      messages: { ...get().messages, [id]: msgs },
+    });
   },
 
   restoreLastActive: async (agentId: string) => {
@@ -170,6 +192,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       },
       // 新轮次开始：清空上一轮的工具调用卡片，避免跨轮次累积后堆到错误位置
       toolEvents: { ...s.toolEvents, [aid]: [] },
+      // 缓存请求供错误重试
+      lastRequest: { type: "send", content, images: images && images.length > 0 ? images : undefined, userMsgId: userMsg.id, conversationId: aid },
     }));
 
     await logService.log("info", `send_message: conv=${aid} len=${content.length}`);
@@ -179,6 +203,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       const s = useSettingsStore.getState();
       const agentMode = get().agentMode;
+      const agent = useAgentStore.getState().selectedAgent;
       const msgId = await chatService.send({
         conversationId: aid,
         content,
@@ -187,6 +212,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         apiBaseUrl: s.apiBaseUrl,
         model: s.defaultModel,
         agentMode,
+        temperature: agent?.temperature,
+        maxTokens: agent?.max_tokens,
+        topP: agent?.top_p,
+        userMessageId: userMsg.id,
       });
       await logService.log("info", `send_message ok: msgId=${msgId}`);
       // 补设 msgId；若首块已锁存则同值，且不覆盖已累积的 streamingText
@@ -311,8 +340,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
 
     // 先标记流式开始，使首块竞态期间能锁存 message_id
-    set({ streamingText: "", streamingMsgId: null });
+    set({ streamingText: "", streamingMsgId: null, lastRequest: { type: "regenerate", messageId, conversationId: cid } });
     const s = useSettingsStore.getState();
+    const agent = useAgentStore.getState().selectedAgent;
     try {
       const msgId = await chatService.regenerate({
         conversationId: cid,
@@ -321,10 +351,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
         apiBaseUrl: s.apiBaseUrl,
         model: s.defaultModel,
         agentMode: state.agentMode,
+        temperature: agent?.temperature,
+        maxTokens: agent?.max_tokens,
+        topP: agent?.top_p,
       });
       set((st) => ({ streamingMsgId: msgId, streamingText: st.streamingText ?? "" }));
     } catch (err) {
       set({ error: String(err), streamingText: null, streamingMsgId: null });
+    }
+  },
+
+  retry: async () => {
+    const req = get().lastRequest;
+    if (!req) return;
+    set({ error: null });
+    if (req.type === "send") {
+      // 删除失败的那次用户消息（及部分回复），再重发，避免重复用户消息
+      await get().deleteMessage(req.userMsgId, req.conversationId);
+      await get().sendMessage(req.content, req.images);
+    } else {
+      await get().regenerate(req.messageId, req.conversationId);
     }
   },
 
@@ -381,5 +427,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const existing = s.toolEvents[conversationId] || [];
       return { toolEvents: { ...s.toolEvents, [conversationId]: [...existing, event] } };
     });
+  },
+
+  addApprovalRequest: (req: ApprovalRequestEvent) => {
+    set((s) => ({ pendingApprovals: [...s.pendingApprovals, req] }));
+  },
+
+  resolveApproval: async (requestId: string, approved: boolean, trustTool: boolean) => {
+    // 先从队列移除（即时反馈），再通知后端（唤醒阻塞的 await）
+    set((s) => ({ pendingApprovals: s.pendingApprovals.filter((p) => p.request_id !== requestId) }));
+    try {
+      await invoke("approve_tool_call", { requestId, approved, trustTool });
+    } catch (e) {
+      console.error("approve_tool_call failed:", e);
+    }
   },
 }));

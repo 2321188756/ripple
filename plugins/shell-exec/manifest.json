@@ -1,0 +1,32 @@
+{
+  "name": "shell-exec",
+  "version": "1.0.0",
+  "description": "执行 shell 命令并返回输出。用于系统操作、开发任务、文件处理。每次调用需用户审批（高危）。",
+  "author": "Ripple",
+  "runtime": "python",
+  "entry": "shell_exec.py",
+  "mode": "tool",
+  "tools": [
+    {
+      "name": "run_command",
+      "description": "执行 shell 命令，返回 stdout/stderr 和退出码。优先用 bash（若可用），否则系统默认 shell。命令在工作目录内执行，有超时保护。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": { "type": "string", "description": "要执行的命令" },
+          "cwd": { "type": "string", "description": "工作目录（留空=默认目录，通常是用户主目录）", "default": "" },
+          "timeout": { "type": "integer", "description": "超时秒数（默认 30，超时则终止并报错）", "default": 30 }
+        },
+        "required": ["command"]
+      }
+    }
+  ],
+  "permissions": ["shell"],
+  "config_schema": {
+    "type": "object",
+    "properties": {
+      "default_cwd": { "type": "string", "description": "默认工作目录（留空=用户主目录）", "default": "" },
+      "max_output": { "type": "integer", "description": "stdout/stderr 各自最大字符数（默认 10000）", "default": 10000 }
+    }
+  }
+}

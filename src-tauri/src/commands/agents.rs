@@ -68,7 +68,7 @@ pub async fn create_agent(
     conn.execute(
         "INSERT INTO agents (id, name, description, system_prompt, tools, model, icon, created_at, updated_at, \
          icon_color, border_color, border_width, name_color, temperature, max_tokens, top_p) \
-         VALUES (?1,?2,?3,?4,'[]','','🤖',?5,?6,'#6366f1','#6366f1',3,'#1e293b',0.7,4096,1.0)",
+         VALUES (?1,?2,?3,?4,'[]','','🤖',?5,?6,'#6366f1','#6366f1',2,'#1e293b',0.7,4096,1.0)",
         rusqlite::params![id, name, description.unwrap_or_default(), system_prompt.unwrap_or_else(|| "You are a helpful assistant.".into()), now, now],
     ).map_err(|e| e.to_string())?;
     get_agent_by_id(&conn, &id)

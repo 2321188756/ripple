@@ -9,11 +9,35 @@ pub fn builtin_tools() -> Vec<ToolDefinition> {
     let mut tools: Vec<ToolDefinition> = vec![
         calculator_tool(),
         rag_search_tool(),
+        get_time_info_tool(),
+        get_weather_tool(),
+        remember_tool(),
     ];
     // 扫描并加载插件工具
     let plugin_tools = crate::commands::plugins::plugin_tools();
     tools.extend(plugin_tools);
     tools
+}
+
+// ---- 记忆工具 ----
+
+fn remember_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "remember".into(),
+        description: "Store information to your long-term memory for future conversations. Use this when the user asks you to remember something, or when you learn important facts/preferences about the user. Always include full context: time, scenario, feelings, specific details (2-3 sentences).".into(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "The information to remember (include rich context: time, scenario, feelings, details - 2-3 sentences)"
+                }
+            },
+            "required": ["content"]
+        }),
+        source: ToolSource::Builtin,
+        requires_approval: false,
+    }
 }
 
 // ---- RAG 搜索 ----
@@ -265,6 +289,82 @@ mod tests {
         assert!(eval_math("2+").is_err());
         assert!(eval_math("(3").is_err());
     }
+}
+
+// ---- 时间日期 ----
+
+fn get_time_info_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "get_time_info".into(),
+        description: "Get the current date, time, and timezone. No parameters needed.".into(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {}
+        }),
+        source: ToolSource::Builtin,
+        requires_approval: false,
+    }
+}
+
+pub fn exec_get_time_info(_args: &serde_json::Value) -> Result<String, String> {
+    use chrono::Local;
+    let now = Local::now();
+    let weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"];
+    let wd = weekdays[now.format("%w").to_string().parse::<usize>().unwrap_or(1)];
+    Ok(format!(
+        "当前时间：{}\n当前日期：{}年{}月{}日 {}\n时区：UTC{}\n时间戳：{}",
+        now.format("%H:%M:%S"),
+        now.format("%Y"),
+        now.format("%m"),
+        now.format("%d"),
+        wd,
+        now.format("%z"),
+        now.timestamp(),
+    ))
+}
+
+// ---- 天气 ----
+
+fn get_weather_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "get_weather".into(),
+        description: "查询城市当前天气。参数 city：城市名，如 Beijing / London / Tokyo / 上海".into(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "城市名，如 Beijing、London、Tokyo，中文也可"
+                }
+            },
+            "required": ["city"]
+        }),
+        source: ToolSource::Builtin,
+        requires_approval: false,
+    }
+}
+
+pub async fn exec_get_weather(args: &serde_json::Value) -> Result<String, String> {
+    let city = args.get("city")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing 'city' argument".to_string())?;
+
+    let url = format!("https://wttr.in/{}?format=%C+|+%t+|+Humidity:%h+|+Wind:%w&lang=zh", urlencoding(city));
+    let resp = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("weather request failed: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("read response failed: {e}"))?;
+
+    if resp.contains("Unknown location") {
+        return Err(format!("未找到城市：{city}"));
+    }
+    Ok(format!("{city} 天气：{resp}"))
+}
+
+fn urlencoding(s: &str) -> String {
+    s.replace(' ', "+")
 }
 
 #[cfg(test)]

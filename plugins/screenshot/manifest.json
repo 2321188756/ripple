@@ -1,0 +1,22 @@
+{
+  "name": "screenshot",
+  "version": "1.0.0",
+  "description": "截屏并保存为 PNG 文件，返回路径。Windows 用 PowerShell .NET。",
+  "author": "Ripple",
+  "runtime": "python",
+  "entry": "screenshot.py",
+  "mode": "tool",
+  "tools": [
+    {
+      "name": "capture_screen",
+      "description": "截取全屏保存为 PNG，返回文件路径。用户可查看该图。AI 本身看不到图像内容（除非接视觉模型）。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "save_dir": { "type": "string", "description": "保存目录（留空=用户主目录/ripple_screenshots）", "default": "" }
+        }
+      }
+    }
+  ],
+  "permissions": ["screen"]
+}

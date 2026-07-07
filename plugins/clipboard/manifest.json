@@ -1,0 +1,28 @@
+{
+  "name": "clipboard",
+  "version": "1.0.0",
+  "description": "读写系统剪贴板。用 tkinter（stdlib，跨平台）。",
+  "author": "Ripple",
+  "runtime": "python",
+  "entry": "clipboard.py",
+  "mode": "tool",
+  "tools": [
+    {
+      "name": "read_clipboard",
+      "description": "读取系统剪贴板当前文本内容。",
+      "parameters": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "write_clipboard",
+      "description": "写入文本到系统剪贴板（覆盖）。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string", "description": "要写入剪贴板的文本" }
+        },
+        "required": ["text"]
+      }
+    }
+  ],
+  "permissions": ["clipboard"]
+}

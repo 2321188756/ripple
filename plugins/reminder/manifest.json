@@ -1,0 +1,25 @@
+{
+  "name": "reminder",
+  "version": "1.0.0",
+  "description": "桌面提醒弹窗。Windows 用 ctypes MessageBox，延迟由独立进程处理不阻塞主流程。",
+  "author": "Ripple",
+  "runtime": "python",
+  "entry": "reminder.py",
+  "mode": "tool",
+  "tools": [
+    {
+      "name": "remind",
+      "description": "弹出桌面提醒窗口。可设延迟（秒），延迟到点自动弹窗。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string", "description": "提醒内容" },
+          "delay_seconds": { "type": "integer", "description": "延迟秒数（0=立即弹窗，默认 0）", "default": 0 },
+          "title": { "type": "string", "description": "弹窗标题（默认 Ripple 提醒）", "default": "Ripple 提醒" }
+        },
+        "required": ["message"]
+      }
+    }
+  ],
+  "permissions": ["notification"]
+}

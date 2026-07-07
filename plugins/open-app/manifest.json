@@ -1,0 +1,23 @@
+{
+  "name": "open-app",
+  "version": "1.0.0",
+  "description": "用默认程序打开文件/URL，或启动应用。跨平台。",
+  "author": "Ripple",
+  "runtime": "python",
+  "entry": "open_app.py",
+  "mode": "tool",
+  "tools": [
+    {
+      "name": "open_path",
+      "description": "用系统默认程序打开文件、URL 或启动应用。Windows 用 os.startfile，mac 用 open，linux 用 xdg-open。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string", "description": "文件路径 / URL / 可执行程序名" }
+        },
+        "required": ["path"]
+      }
+    }
+  ],
+  "permissions": ["shell"]
+}

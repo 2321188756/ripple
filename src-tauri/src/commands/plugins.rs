@@ -147,13 +147,14 @@ pub fn plugin_tools() -> Vec<ToolDefinition> {
 }
 
 /// 执行插件工具。api_name 为 plugin_tools 注册的兼容名，经 tool_name_map 反查 (plugin, tool)。
-pub async fn exec_by_tool_name(api_name: &str, args: &serde_json::Value) -> Result<String, String> {
+/// api_key/api_base_url 通过 env (RIPPLE_API_KEY/RIPPLE_API_BASE) 传给插件，供需要凭证的工具（image-gen 等）使用。
+pub async fn exec_by_tool_name(api_name: &str, args: &serde_json::Value, api_key: Option<&str>, api_base_url: Option<&str>) -> Result<String, String> {
     let (plugin_name, tool_name) = {
         let map = tool_name_map().lock().unwrap();
         map.get(api_name).cloned()
             .ok_or_else(|| format!("plugin tool not found: {api_name}"))?
     };
-    exec_plugin_tool(&plugin_name, &tool_name, args).await
+    exec_plugin_tool(&plugin_name, &tool_name, args, api_key, api_base_url).await
 }
 
 /// 查询某工具是否需要用户审批。plugin_ 开头查 registry（runtime != rhai 即需审批），
@@ -226,7 +227,7 @@ pub fn add_trusted_tool(conn: &rusqlite::Connection, agent_id: &str, tool_name: 
     Ok(())
 }
 
-pub async fn exec_plugin_tool(plugin_name: &str, tool_name: &str, args: &serde_json::Value) -> Result<String, String> {
+pub async fn exec_plugin_tool(plugin_name: &str, tool_name: &str, args: &serde_json::Value, api_key: Option<&str>, api_base_url: Option<&str>) -> Result<String, String> {
     // 取出所需信息后立即释放 registry 锁（std::sync::MutexGuard 非 Send，不能跨 await 持有）
     let (entry_path, code, runtime) = {
         let registry = registry().lock().unwrap();
@@ -238,9 +239,9 @@ pub async fn exec_plugin_tool(plugin_name: &str, tool_name: &str, args: &serde_j
 
     match runtime.as_str() {
         "rhai" => exec_rhai(&code, args),
-        "node" => exec_process("node", &entry_path, args, tool_name).await,
-        "python" | "py" => exec_process("python", &entry_path, args, tool_name).await,
-        "shell" | "bash" => exec_process("bash", &entry_path, args, tool_name).await,
+        "node" => exec_process("node", &entry_path, args, tool_name, api_key, api_base_url).await,
+        "python" | "py" => exec_process("python", &entry_path, args, tool_name, api_key, api_base_url).await,
+        "shell" | "bash" => exec_process("bash", &entry_path, args, tool_name, api_key, api_base_url).await,
         other => Err(format!("unsupported runtime: {other}")),
     }
 }
@@ -259,17 +260,22 @@ fn exec_rhai(code: &str, _args: &serde_json::Value) -> Result<String, String> {
 /// 异步执行子进程（tokio::process），不阻塞 tokio 工作线程。
 /// 参数通过 stdin 管道传入（JSON + 换行），脚本用 input()/stdin 读取。
 /// tool_name 通过 RIPPLE_TOOL 环境变量传入，单脚本能分派多工具（不读则忽略，向后兼容）。
-async fn exec_process(cmd: &str, script_path: &PathBuf, args: &serde_json::Value, tool_name: &str) -> Result<String, String> {
+/// api_key/api_base_url 通过 RIPPLE_API_KEY/RIPPLE_API_BASE 传入（需凭证的工具用，如 image-gen）。
+async fn exec_process(cmd: &str, script_path: &PathBuf, args: &serde_json::Value, tool_name: &str, api_key: Option<&str>, api_base_url: Option<&str>) -> Result<String, String> {
     use std::process::Stdio;
     use tokio::io::AsyncWriteExt;
     let args_json = serde_json::to_string(args).unwrap_or_default();
-    let mut child = tokio::process::Command::new(cmd)
-        .arg(script_path)
+    let mut builder = tokio::process::Command::new(cmd);
+    builder.arg(script_path)
         .env("RIPPLE_TOOL", tool_name)
         // 强制 Python 用 UTF-8 stdio（Windows 默认 GBK，print 非 ASCII 字符会 UnicodeEncodeError，
         // 且后端 from_utf8_lossy 会把 GBK 字节当 UTF-8 解码成乱码）。node/shell 忽略这两个 env，无副作用。
         .env("PYTHONUTF8", "1")
-        .env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONIOENCODING", "utf-8");
+    // 凭证 env（仅 AI 工具调用链传入；execute_plugin_tool IPC 手动触发时为 None）
+    if let Some(k) = api_key { builder.env("RIPPLE_API_KEY", k); }
+    if let Some(u) = api_base_url { builder.env("RIPPLE_API_BASE", u); }
+    let mut child = builder
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -341,7 +347,7 @@ pub async fn execute_plugin_tool(tool_name: String, args: serde_json::Value) -> 
     if parts.len() != 2 {
         return Err("invalid tool name, expected 'plugin.tool'".into());
     }
-    exec_plugin_tool(parts[0], parts[1], &args).await
+    exec_plugin_tool(parts[0], parts[1], &args, None, None).await
 }
 
 /// 回传工具审批结果（前端审批框调用）。唤醒对应 request_id 的 oneshot，让后端 await 继续。

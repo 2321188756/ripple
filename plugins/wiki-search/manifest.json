@@ -1,0 +1,25 @@
+{
+  "name": "wiki-search",
+  "version": "1.0.0",
+  "description": "搜索 Wikipedia 并返回条目摘要。结构化知识检索，区别于 web-search 的网页搜索。",
+  "author": "Ripple",
+  "runtime": "python",
+  "entry": "wiki_search.py",
+  "mode": "tool",
+  "tools": [
+    {
+      "name": "wiki_search",
+      "description": "搜索 Wikipedia 获取条目摘要。适合查概念、人物、历史、技术术语等百科知识。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "搜索词" },
+          "lang": { "type": "string", "description": "语言版本（zh=中文，en=英文，默认 zh）", "default": "zh" },
+          "limit": { "type": "integer", "description": "返回条目数（默认 3）", "default": 3 }
+        },
+        "required": ["query"]
+      }
+    }
+  ],
+  "permissions": ["network"]
+}

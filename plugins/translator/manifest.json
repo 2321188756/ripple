@@ -1,0 +1,25 @@
+{
+  "name": "translator",
+  "version": "1.0.0",
+  "description": "文本翻译。用 MyMemory 免费 API（无需 key）。支持自动检测源语言。",
+  "author": "Ripple",
+  "runtime": "python",
+  "entry": "translator.py",
+  "mode": "tool",
+  "tools": [
+    {
+      "name": "translate",
+      "description": "翻译文本。source 留空自动检测（含中文→zh，否则 en）。target 默认 zh。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string", "description": "要翻译的文本（限 500 字符，超出截断）" },
+          "target": { "type": "string", "description": "目标语言代码（zh/en/ja/ko/fr/de 等，默认 zh）", "default": "zh" },
+          "source": { "type": "string", "description": "源语言代码（留空自动检测）", "default": "" }
+        },
+        "required": ["text"]
+      }
+    }
+  ],
+  "permissions": ["network"]
+}

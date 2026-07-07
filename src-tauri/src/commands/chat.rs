@@ -267,6 +267,7 @@ async fn do_chat_stream_inner(
         .unwrap_or("default")
         .to_string();
     let api_key_clone = api_key.to_string();
+    let api_base_url_clone = api_base_url.clone();
     let db2 = db.clone();
     let streams2 = active_streams.clone();
     let cancel2 = cancel.clone();
@@ -274,7 +275,7 @@ async fn do_chat_stream_inner(
 
     tokio::spawn(async move {
         tracing::info!("spawned stream task (do_chat_stream_inner)");
-        let result = chat_with_tools(&app, &provider, &api_key_clone, chat_request, &conv_id2, &agent_id_clone, &spawn_msg_id, &model_id, &db2, &cancel2, &cancelled2).await;
+        let result = chat_with_tools(&app, &provider, &api_key_clone, &api_base_url_clone, chat_request, &conv_id2, &agent_id_clone, &spawn_msg_id, &model_id, &db2, &cancel2, &cancelled2).await;
 
         streams2.lock().await.remove(&conv_id2);
 
@@ -506,6 +507,7 @@ async fn chat_with_tools(
     app: &AppHandle,
     provider: &OpenAiProvider,
     api_key: &str,
+    api_base_url: &Option<String>,
     mut request: ChatRequest,
     conversation_id: &str,
     agent_id: &str,
@@ -667,7 +669,7 @@ async fn chat_with_tools(
                 "get_weather" => crate::commands::tools::exec_get_weather(&args).await,
                 "remember" => crate::commands::memory::exec_remember(db, conversation_id, &args).await,
                 other if other.starts_with("plugin_") => {
-                    crate::commands::plugins::exec_by_tool_name(other, &args).await
+                    crate::commands::plugins::exec_by_tool_name(other, &args, Some(api_key), api_base_url.as_deref()).await
                 }
                 other => Err(format!("unknown tool: {other}")),
             };

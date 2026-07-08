@@ -159,7 +159,7 @@ export function GeneralSettings() {
       {/* 测试结果 */}
       {testResult && (
         <div className={`p-3 rounded-lg text-xs flex items-start gap-2 ${
-          testResult.ok ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+          testResult.ok ? "bg-success/10 text-success border border-success/20"
             : "bg-destructive/10 text-destructive border border-destructive/20"
         }`}>
           {testResult.ok ? <Check className="w-3.5 h-3.5 mt-0.5 shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />}

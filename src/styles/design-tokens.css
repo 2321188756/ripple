@@ -1,0 +1,130 @@
+/**
+ * Ripple 设计 Token
+ * 所有 CSS 变量集中定义，globals.css @import 本文件。
+ * 色阶用 HSL（H S% L%），配合 tailwind hsl(var(--...)) 语法。
+ */
+
+@layer base {
+  :root {
+    /* === 基础语义色（沿用 shadcn 约定） === */
+    --background: 240 10% 97%;
+    --foreground: 224 71% 4%;
+    --card: 0 0% 100%;
+    --card-foreground: 224 71% 4%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 224 71% 4%;
+    --primary: 243 75% 59%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 220 9% 20%;
+    --muted: 220 14% 95%;
+    --muted-foreground: 220 9% 46%;
+    --accent: 220 14% 94%;
+    --accent-foreground: 220 9% 20%;
+    --destructive: 0 84% 56%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 13% 89%;
+    --input: 220 13% 89%;
+    --ring: 243 75% 59%;
+    --radius: 0.625rem;
+
+    /* === 新增语义色：warning / success / info === */
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+    --success: 152 65% 45%;
+    --success-foreground: 0 0% 100%;
+    --info: 199 89% 48%;
+    --info-foreground: 0 0% 100%;
+
+    /* === 主色色阶（50-900，用于渐变/悬停/边框层次） === */
+    --primary-50: 243 75% 97%;
+    --primary-100: 243 75% 93%;
+    --primary-200: 243 75% 86%;
+    --primary-300: 243 75% 76%;
+    --primary-400: 243 75% 66%;
+    --primary-500: 243 75% 59%;
+    --primary-600: 243 75% 51%;
+    --primary-700: 243 75% 43%;
+    --primary-800: 243 75% 34%;
+    --primary-900: 243 75% 25%;
+
+    /* === 侧边栏 === */
+    --sidebar-background: 240 10% 97%;
+    --sidebar-foreground: 220 9% 30%;
+    --sidebar-primary: 243 75% 59%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 14% 93%;
+    --sidebar-accent-foreground: 220 9% 20%;
+    --sidebar-border: 220 13% 89%;
+    --sidebar-ring: 243 75% 59%;
+
+    /* === 阴影（多图层叠加 + 前景色折射） === */
+    --shadow-xs: 0 1px 2px hsl(var(--foreground) / 0.04);
+    --shadow-sm: 0 1px 3px hsl(var(--foreground) / 0.06), 0 1px 2px hsl(var(--foreground) / 0.04);
+    --shadow-md: 0 4px 6px hsl(var(--foreground) / 0.07), 0 2px 4px hsl(var(--foreground) / 0.04);
+    --shadow-lg: 0 10px 15px hsl(var(--foreground) / 0.08), 0 4px 6px hsl(var(--foreground) / 0.04);
+    --shadow-xl: 0 20px 25px hsl(var(--foreground) / 0.1), 0 8px 10px hsl(var(--foreground) / 0.06);
+    --shadow-primary: 0 2px 8px hsl(var(--primary) / 0.25), 0 1px 3px hsl(var(--primary) / 0.1);
+
+    /* === 排版比例尺（Major Third 1.25x） === */
+    --text-xs: 0.75rem;     /* 12px */
+    --text-sm: 0.875rem;    /* 14px */
+    --text-base: 1rem;      /* 16px */
+    --text-lg: 1.25rem;     /* 20px */
+    --text-xl: 1.5rem;      /* 24px */
+    --text-2xl: 1.875rem;   /* 30px */
+    --text-3xl: 2.25rem;    /* 36px */
+  }
+
+  .dark {
+    --background: 224 71% 4%;
+    --foreground: 210 20% 92%;
+    --card: 224 71% 8%;
+    --card-foreground: 210 20% 92%;
+    --popover: 224 71% 6%;
+    --popover-foreground: 210 20% 92%;
+    --primary: 243 75% 67%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 215 28% 15%;
+    --secondary-foreground: 210 20% 92%;
+    --muted: 215 28% 14%;
+    --muted-foreground: 217 15% 62%;
+    --accent: 215 28% 16%;
+    --accent-foreground: 210 20% 92%;
+    --destructive: 0 72% 50%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 215 28% 18%;
+    --input: 215 28% 18%;
+    --ring: 243 75% 67%;
+
+    --warning: 38 92% 55%;
+    --warning-foreground: 0 0% 100%;
+    --success: 152 60% 50%;
+    --success-foreground: 0 0% 100%;
+    --info: 199 89% 55%;
+    --info-foreground: 0 0% 100%;
+
+    /* 暗色下主色色阶整体提亮（400-600 最常用） */
+    --primary-400: 243 75% 72%;
+    --primary-500: 243 75% 67%;
+    --primary-600: 243 75% 60%;
+    --primary-700: 243 75% 52%;
+
+    --sidebar-background: 224 71% 5%;
+    --sidebar-foreground: 210 20% 92%;
+    --sidebar-primary: 243 75% 67%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 215 28% 15%;
+    --sidebar-accent-foreground: 210 20% 92%;
+    --sidebar-border: 215 28% 18%;
+    --sidebar-ring: 243 75% 67%;
+
+    /* 暗色阴影用纯黑，alpha 更高才可见 */
+    --shadow-xs: 0 1px 2px hsl(0 0% 0% / 0.3);
+    --shadow-sm: 0 1px 3px hsl(0 0% 0% / 0.4), 0 1px 2px hsl(0 0% 0% / 0.3);
+    --shadow-md: 0 4px 6px hsl(0 0% 0% / 0.45), 0 2px 4px hsl(0 0% 0% / 0.3);
+    --shadow-lg: 0 10px 15px hsl(0 0% 0% / 0.5), 0 4px 6px hsl(0 0% 0% / 0.3);
+    --shadow-xl: 0 20px 25px hsl(0 0% 0% / 0.55), 0 8px 10px hsl(0 0% 0% / 0.4);
+    --shadow-primary: 0 2px 8px hsl(var(--primary) / 0.35), 0 1px 3px hsl(var(--primary) / 0.15);
+  }
+}

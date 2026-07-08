@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-import { Download, Sun, Moon, Monitor, Palette, Settings } from "lucide-react";
+import { Download, Sun, Moon, Monitor, Settings, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -10,11 +9,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ModelSelector } from "@/components/common/ModelSelector";
+import { AppLogo } from "@/components/common/AppLogo";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { exportService } from "@/services/export.service";
-import { themeService } from "@/services/theme.service";
 import { openSettingsWindow } from "@/lib/openSettings";
-import type { Theme, ThemeDefinition } from "@/types/theme";
+import type { Theme } from "@/types/theme";
 
 interface ChatHeaderProps {
   activeId: string | null;
@@ -22,7 +21,7 @@ interface ChatHeaderProps {
   onExportError: (msg: string) => void;
   theme: Theme;
   onThemeChange: (t: Theme) => void;
-  onApplyTheme?: (themeDef: ThemeDefinition) => void;
+  onOpenWorkshop?: () => void;
   isDark: boolean;
 }
 
@@ -39,16 +38,11 @@ export function ChatHeader({
   onExportError,
   theme,
   onThemeChange,
-  onApplyTheme,
+  onOpenWorkshop,
 }: ChatHeaderProps) {
   const defaultModel = useSettingsStore((s) => s.defaultModel);
   const setDefaultModel = useSettingsStore((s) => s.setDefaultModel);
   const CurrentIcon = themeLabels[theme].icon;
-  const [customThemes, setCustomThemes] = useState<ThemeDefinition[]>([]);
-
-  useEffect(() => {
-    themeService.list().then(setCustomThemes).catch(() => {});
-  }, []);
 
   const handleExport = async (format: "markdown" | "json") => {
     if (!activeId) return;
@@ -70,9 +64,7 @@ export function ChatHeader({
     <header className="h-12 border-b border-border flex items-center px-4 gap-2.5 bg-gradient-to-r from-background via-background to-primary/3">
       {/* Logo */}
       <div className="flex items-center gap-2 mr-1">
-        <div className="w-6 h-6 rounded-lg bg-primary flex items-center justify-center shadow-sm">
-          <span className="text-primary-foreground text-[10px] font-bold">R</span>
-        </div>
+        <AppLogo size="md" />
         <h1 className="text-sm font-semibold tracking-tight">Ripple</h1>
       </div>
 
@@ -125,18 +117,13 @@ export function ChatHeader({
             ),
           )}
           <DropdownMenuSeparator />
-          {/* 自定义主题 */}
-          <div className="px-2 py-1 text-[10px] text-muted-foreground font-medium">主题配色</div>
-          {customThemes.map((t) => (
-            <DropdownMenuItem key={t.id} onClick={() => onApplyTheme?.(t)} className="text-xs gap-2">
-              <Palette className="w-3.5 h-3.5" />
-              {t.name}
-            </DropdownMenuItem>
-          ))}
-          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={onOpenWorkshop} className="text-xs gap-2 text-primary">
+            <Sparkles className="w-3.5 h-3.5" />
+            主题工坊
+          </DropdownMenuItem>
           <DropdownMenuItem onClick={openSettingsWindow} className="text-xs gap-2 text-muted-foreground">
             <Settings className="w-3.5 h-3.5" />
-            管理主题
+            更多设置
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

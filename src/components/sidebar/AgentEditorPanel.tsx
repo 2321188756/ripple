@@ -232,7 +232,7 @@ export function AgentEditorPanel({ agent }: AgentEditorPanelProps) {
           </div>
         )}
         {permissionLevel === "full" && (
-          <p className="text-[10px] text-amber-600 dark:text-amber-400">
+          <p className="text-[10px] text-warning">
             ⚠ 该 Agent 调用所有插件工具（含 shell-exec / code-runner）将自动执行，无需审批。
           </p>
         )}

@@ -17,4 +17,12 @@ export const themeService = {
   /** 从 JSON 文件导入主题 */
   importTheme: (filePath: string): Promise<ThemeDefinition> =>
     invokeWithTimeout<ThemeDefinition>("import_theme", { filePath }),
+
+  /** 删除主题（内置不可删，当前使用中的由前端拦截） */
+  deleteTheme: (id: string): Promise<void> =>
+    invokeWithTimeout<void>("delete_theme", { id }),
+
+  /** AI 根据关键词生成 3 套候选主题（后端调 LLM，可能耗时 10-30s） */
+  generate: (keyword: string): Promise<ThemeDefinition[]> =>
+    invokeWithTimeout<ThemeDefinition[]>("generate_theme", { keyword }, 90000),
 };

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Send, Square, X, ImagePlus, Expand } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -30,7 +30,7 @@ export function ChatInputArea({ streaming, onSend, onStop }: ChatInputAreaProps)
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const kbList = useKBStore((s) => s.kbs);
-  const mentionItems = kbList.map((k) => ({ id: k.id, label: k.name }));
+  const mentionItems = useMemo(() => kbList.map((k) => ({ id: k.id, label: k.name })), [kbList]);
 
   const {
     showMention, filtered, mentionIdx, detectMention, selectMention, handleKeyDown, hide,

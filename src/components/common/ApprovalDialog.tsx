@@ -41,7 +41,7 @@ export function ApprovalDialog() {
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-sm">
-            <AlertTriangle className="w-4 h-4 text-amber-500" />
+            <AlertTriangle className="w-4 h-4 text-warning" />
             工具调用审批
           </DialogTitle>
         </DialogHeader>
@@ -55,7 +55,7 @@ export function ApprovalDialog() {
               <pre className="p-2 font-mono text-[11px] whitespace-pre-wrap break-all">{argsText}</pre>
             </ScrollArea>
           </div>
-          <p className="text-amber-600 dark:text-amber-400 text-[11px] flex items-start gap-1">
+          <p className="text-warning text-[11px] flex items-start gap-1">
             <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
             <span>此工具可能执行命令、代码或文件操作，批准后将立即运行。如不确认参数安全性，请拒绝。</span>
           </p>

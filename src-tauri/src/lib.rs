@@ -217,6 +217,9 @@ pub fn run() {
             commands::themes::save_themes,
             commands::themes::export_theme,
             commands::themes::import_theme,
+            commands::themes::delete_theme,
+            commands::themes::generate_theme,
+            commands::themes::generate_theme,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

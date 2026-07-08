@@ -50,7 +50,7 @@ export default function ToolCallCard({ event }: { event: ToolCallEvent }) {
             <code
               className={cn(
                 "break-all",
-                isSuccess ? "text-emerald-600 dark:text-emerald-400" : "text-destructive",
+                isSuccess ? "text-success" : "text-destructive",
               )}
             >
               {event.tool_output}

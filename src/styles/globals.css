@@ -1,83 +1,22 @@
+@import "./design-tokens.css";
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-@layer base {
-  :root {
-    --background: 240 10% 97%;
-    --foreground: 224 71% 4%;
-    --card: 0 0% 100%;
-    --card-foreground: 224 71% 4%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 224 71% 4%;
-    --primary: 243 75% 59%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 220 14% 96%;
-    --secondary-foreground: 220 9% 20%;
-    --muted: 220 14% 95%;
-    --muted-foreground: 220 9% 46%;
-    --accent: 220 14% 94%;
-    --accent-foreground: 220 9% 20%;
-    --destructive: 0 84% 56%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 220 13% 89%;
-    --input: 220 13% 89%;
-    --ring: 243 75% 59%;
-    --radius: 0.625rem;
-
-    --sidebar-background: 240 10% 97%;
-    --sidebar-foreground: 220 9% 30%;
-    --sidebar-primary: 243 75% 59%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 220 14% 93%;
-    --sidebar-accent-foreground: 220 9% 20%;
-    --sidebar-border: 220 13% 89%;
-    --sidebar-ring: 243 75% 59%;
-  }
-
-  .dark {
-    --background: 224 71% 4%;
-    --foreground: 210 20% 92%;
-    --card: 224 71% 8%;
-    --card-foreground: 210 20% 92%;
-    --popover: 224 71% 6%;
-    --popover-foreground: 210 20% 92%;
-    --primary: 243 75% 67%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 215 28% 15%;
-    --secondary-foreground: 210 20% 92%;
-    --muted: 215 28% 14%;
-    --muted-foreground: 217 15% 62%;
-    --accent: 215 28% 16%;
-    --accent-foreground: 210 20% 92%;
-    --destructive: 0 72% 50%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 215 28% 18%;
-    --input: 215 28% 18%;
-    --ring: 243 75% 67%;
-
-    --sidebar-background: 224 71% 5%;
-    --sidebar-foreground: 210 20% 92%;
-    --sidebar-primary: 243 75% 67%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 215 28% 15%;
-    --sidebar-accent-foreground: 210 20% 92%;
-    --sidebar-border: 215 28% 18%;
-    --sidebar-ring: 243 75% 67%;
-  }
-}
 
 @layer base {
   * {
     @apply border-border;
   }
   :root {
+    /* 根字体从 15px 提升到 16px，配合 Major Third 比例尺 */
     font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
-    font-size: 15px;
+    font-size: 16px;
     line-height: 1.6;
     color-scheme: light dark;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    /* 防止滚动条出现时布局跳动 */
+    scrollbar-gutter: stable;
   }
   body {
     @apply bg-background text-foreground;
@@ -92,14 +31,14 @@
   }
 }
 
-/* === 自定义样式 === */
+/* === 自定义组件样式 === */
 
-/* 消息气泡 */
+/* 消息气泡：用 token 化的着色阴影 */
 .message-bubble-user {
-  box-shadow: 0 2px 8px hsl(var(--primary) / 0.25);
+  box-shadow: var(--shadow-primary);
 }
 .message-bubble-assistant {
-  box-shadow: 0 1px 3px hsl(var(--foreground) / 0.06);
+  box-shadow: var(--shadow-xs);
 }
 
 /* 消息气泡代码块 */
@@ -109,7 +48,7 @@
   border: 1px solid hsl(var(--border));
   border-radius: var(--radius);
   padding: 0.75rem 1rem;
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
   overflow-x: auto;
 }
 .message-code code {
@@ -122,7 +61,7 @@
   color: hsl(var(--destructive));
   padding: 0.125rem 0.375rem;
   border-radius: 0.25rem;
-  font-size: 0.8125rem;
+  font-size: var(--text-sm);
 }
 
 /* 链接 */
@@ -140,8 +79,8 @@ a {
 
 /* 滚动条美化 */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -158,4 +97,12 @@ a {
 ::selection {
   background: hsl(var(--primary) / 0.2);
   color: hsl(var(--foreground));
+}
+
+/* 全局过渡：交互元素统一 ease-out，避免生硬 */
+button,
+a,
+[role="button"] {
+  transition: background-color 150ms ease-out, color 150ms ease-out,
+    border-color 150ms ease-out, transform 150ms ease-out, box-shadow 150ms ease-out;
 }

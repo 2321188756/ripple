@@ -8,6 +8,7 @@ import { ErrorBanner } from "@/components/layout/ErrorBanner";
 import { VirtualMessageList } from "@/components/chat/VirtualMessageList";
 import { ImagePreview } from "@/components/common/ImagePreview";
 import { ApprovalDialog } from "@/components/common/ApprovalDialog";
+import { ThemeWorkshop } from "@/components/theme/ThemeWorkshop";
 import { openSettingsWindow } from "@/lib/openSettings";
 import { useChatStore } from "@/stores/chatStore";
 import { useAgentStore } from "@/stores/agentStore";
@@ -43,8 +44,9 @@ function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const ipcOk = useIpcStatus();
   const [previewImg, setPreviewImg] = useState<string | null>(null);
+  const [workshopOpen, setWorkshopOpen] = useState(false);
   useStreamEvents();
-  const { theme, setTheme, isDark, applyCustomTheme } = useTheme();
+  const { theme, setTheme, isDark } = useTheme();
 
   // 初始化
   useEffect(() => {
@@ -159,7 +161,7 @@ function App() {
             onExportError={(msg) => useChatStore.getState().setError(msg)}
             theme={theme}
             onThemeChange={setTheme}
-            onApplyTheme={applyCustomTheme}
+            onOpenWorkshop={() => setWorkshopOpen(true)}
             isDark={isDark}
           />
 
@@ -181,6 +183,8 @@ function App() {
         )}
 
         <ApprovalDialog />
+
+        <ThemeWorkshop open={workshopOpen} onOpenChange={setWorkshopOpen} />
       </div>
     </TooltipProvider>
   );

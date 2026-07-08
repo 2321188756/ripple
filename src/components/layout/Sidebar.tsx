@@ -5,6 +5,7 @@ import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { IpcStatusIndicator } from "@/components/common/IpcStatusIndicator";
+import { AppLogo } from "@/components/common/AppLogo";
 import { AgentListView } from "@/components/sidebar/AgentListView";
 import { ConversationListView } from "@/components/sidebar/ConversationListView";
 import { AgentEditorPanel } from "@/components/sidebar/AgentEditorPanel";
@@ -55,9 +56,7 @@ export function Sidebar({ ipcOk, onOpenSettings }: SidebarProps) {
           {/* 顶部：Logo + 折叠按钮 */}
           <div className="flex items-center justify-between px-3 py-2.5 border-b border-sidebar-border">
             <div className="flex items-center gap-2">
-              <div className="w-5 h-5 rounded-md bg-sidebar-primary flex items-center justify-center">
-                <span className="text-sidebar-primary-foreground text-[9px] font-bold">R</span>
-              </div>
+              <AppLogo size="sm" />
               <span className="text-xs font-semibold tracking-tight">Ripple</span>
             </div>
             <Tooltip>

@@ -70,11 +70,29 @@ export function useTheme() {
     localStorage.setItem(THEME_ID_KEY, themeDef.id);
   }, []);
 
+  /** 预览主题（临时应用，不持久化 activeThemeId）。调 revertPreview 恢复。 */
+  const previewTheme = useCallback((themeDef: ThemeDefinition) => {
+    applyThemeVars(themeDef);
+  }, []);
+
+  /** 恢复到当前持久化的主题（取消预览） */
+  const revertPreview = useCallback(() => {
+    // 重新应用 activeThemeId 对应的主题变量
+    const id = localStorage.getItem(THEME_ID_KEY) || "default-light";
+    // 清除当前预览变量后，由调用方重新 applyCustomTheme 或 reload
+    const root = document.documentElement;
+    const prev = localStorage.getItem(CUSTOM_VARS_KEY);
+    if (prev) {
+      try { JSON.parse(prev).forEach((key: string) => root.style.removeProperty(key)); } catch {}
+    }
+    setActiveThemeId(id);
+  }, []);
+
   const isDark =
     theme === "dark" ||
     (theme === "system" &&
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-color-scheme: dark)").matches);
 
-  return { theme, setTheme, isDark, activeThemeId, applyCustomTheme };
+  return { theme, setTheme, isDark, activeThemeId, applyCustomTheme, previewTheme, revertPreview };
 }

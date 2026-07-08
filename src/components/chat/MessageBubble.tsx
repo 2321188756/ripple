@@ -35,7 +35,7 @@ export const MessageBubble = memo(function MessageBubble({ role, content }: Mess
     <div className={cn("flex gap-2.5 px-4 py-1.5", isUser ? "justify-end" : "justify-start")}>
       {!isUser && (
         <Avatar className="h-7 w-7 mt-0.5 shrink-0 ring-1 ring-border/50">
-          <AvatarFallback className="bg-gradient-to-br from-primary/15 to-violet-500/15 text-primary">
+          <AvatarFallback className="bg-gradient-to-br from-primary/15 to-primary-300/15 text-primary">
             <Sparkles className="w-3.5 h-3.5" />
           </AvatarFallback>
         </Avatar>

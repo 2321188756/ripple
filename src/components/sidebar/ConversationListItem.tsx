@@ -78,7 +78,7 @@ export function ConversationListItem({
             onDoubleClick={startEdit}
           >
             <div className="truncate font-medium text-xs flex items-center gap-1">
-              {conv.pinned && <Pin className="w-2.5 h-2.5 text-amber-500 inline" />}
+              {conv.pinned && <Pin className="w-2.5 h-2.5 text-warning inline" />}
               {conv.title}
             </div>
             <div className="text-[10px] text-muted-foreground mt-0.5">
@@ -101,7 +101,7 @@ export function ConversationListItem({
                       aria-label={conv.pinned ? "取消置顶" : "置顶"}
                     >
                       {conv.pinned ? (
-                        <PinOff className="w-3 h-3 text-amber-500" />
+                        <PinOff className="w-3 h-3 text-warning" />
                       ) : (
                         <Pin className="w-3 h-3" />
                       )}

@@ -37,7 +37,7 @@ export const ThemeCard = memo(function ThemeCard({
       )}
     >
       {/* 色块预览：模拟 App 界面（有壁纸则叠加壁纸） */}
-      <div className="relative h-28 p-2.5" style={{ background: hsl("--background"), ...wallpaperStyle }}>
+      <div className="relative h-28 p-2.5" style={{ background: hsl("--background"), ...wallpaperStyle }} aria-hidden="true">
         {/* 模拟侧边栏 */}
         <div className="absolute left-0 top-0 bottom-0 w-1/4" style={{ background: hsl("--sidebar-background") }} />
         {/* 模拟消息气泡 */}
@@ -82,7 +82,7 @@ export const ThemeCard = memo(function ThemeCard({
         )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button size="icon" variant="ghost" className="h-6 w-6 shrink-0">
+            <Button size="icon-xs" variant="ghost" className="shrink-0" aria-label={`更多主题操作：${theme.name}`}>
               <MoreVertical className="w-3 h-3" />
             </Button>
           </DropdownMenuTrigger>

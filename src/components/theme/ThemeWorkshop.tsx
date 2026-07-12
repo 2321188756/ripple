@@ -70,19 +70,8 @@ export function ThemeWorkshop({ open, onOpenChange }: ThemeWorkshopProps) {
   }, [open, importFromPath]);
 
   const handleApply = useCallback(async (theme: ThemeDefinition) => {
-    applyCustomTheme(theme);
+    await applyCustomTheme(theme);
     setActiveId(theme.id);
-    // 如果主题有壁纸，同步加载显示（Mica 磨砂：壁纸在 html 层，UI 层 backdrop-filter 模糊透过）
-    if (theme.wallpaper) {
-      try {
-        const dataUrl = await themeService.readWallpaperBase64(theme.wallpaper);
-        document.body.style.backgroundImage = `url(${dataUrl})`;
-        document.body.style.backgroundSize = "cover";
-        document.body.style.backgroundPosition = "center";
-        document.body.style.backgroundAttachment = "fixed";
-        document.body.classList.add("has-wallpaper");
-      } catch (e) { console.error("wallpaper load error:", e); }
-    }
   }, [applyCustomTheme]);
 
   /** 设置壁纸：选图片 -> 复制到壁纸目录 -> 更新主题 -> 同步显示壁纸 */

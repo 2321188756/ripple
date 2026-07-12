@@ -1,104 +1,52 @@
 import { useCallback, useEffect, useState } from "react";
-import type { Theme } from "@/types/theme";
-import type { ThemeDefinition } from "@/types/theme";
+import type { Theme, ThemeDefinition } from "@/types/theme";
+import { applyThemeDefinition, clearThemeDefinition, getActiveThemeId } from "@/lib/theme-runtime";
 
 const STORAGE_KEY = "ripple-theme";
-const THEME_ID_KEY = "ripple-active-theme-id";
-const CUSTOM_VARS_KEY = "ripple-custom-vars";
 
-function applyTheme(theme: Theme) {
-  const root = document.documentElement;
-  const isDark =
-    theme === "dark" ||
-    (theme === "system" &&
-      window.matchMedia("(prefers-color-scheme: dark)").matches);
-  root.classList.toggle("dark", isDark);
+function applyMode(theme: Theme) {
+  const isDark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.classList.toggle("dark", isDark);
 }
 
-/** 将主题的 CSS 变量应用到 :root / .dark，并设置背景壁纸（如有） */
-function applyThemeVars(themeDef: ThemeDefinition | null) {
-  const root = document.documentElement;
-  // 清除之前应用的自定义变量
-  const prev = localStorage.getItem(CUSTOM_VARS_KEY);
-  if (prev) {
-    try { JSON.parse(prev).forEach((key: string) => root.style.removeProperty(key)); } catch {}
-  }
-  // 清除壁纸（body 是壁纸层，backdrop-filter 需要和 body 同合成层才能生效）
-  document.body.style.backgroundImage = "";
-  document.body.style.backgroundSize = "";
-  document.body.style.backgroundPosition = "";
-  document.body.style.backgroundAttachment = "";
-  document.body.classList.remove("has-wallpaper");
-  if (!themeDef) return;
-  const vars: string[] = [];
-  for (const [key, val] of Object.entries(themeDef.colors.light || {})) {
-    root.style.setProperty(key, val);
-    vars.push(key);
-  }
-  for (const [key, val] of Object.entries(themeDef.colors.dark || {})) {
-    root.style.setProperty(key, val);
-    vars.push(key);
-  }
-  localStorage.setItem(CUSTOM_VARS_KEY, JSON.stringify(vars));
-}
-
-/**
- * 主题切换 hook（light / dark / system + 自定义主题）。
- */
+/** 主题切换 hook（light / dark / system + 自定义主题）。 */
 export function useTheme() {
   const [theme, setThemeState] = useState<Theme>(() => {
     if (typeof window === "undefined") return "system";
     return (localStorage.getItem(STORAGE_KEY) as Theme) || "system";
   });
-  const [activeThemeId, setActiveThemeId] = useState<string>(
-    () => localStorage.getItem(THEME_ID_KEY) || "default-light"
-  );
+  const [activeThemeId, setActiveThemeId] = useState<string>(() => getActiveThemeId());
 
   useEffect(() => {
-    applyTheme(theme);
+    applyMode(theme);
     localStorage.setItem(STORAGE_KEY, theme);
   }, [theme]);
 
   useEffect(() => {
     if (theme !== "system") return;
-    const mql = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = () => applyTheme("system");
-    mql.addEventListener("change", handler);
-    return () => mql.removeEventListener("change", handler);
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = () => applyMode("system");
+    query.addEventListener("change", handleChange);
+    return () => query.removeEventListener("change", handleChange);
   }, [theme]);
 
-  const setTheme = (t: Theme) => setThemeState(t);
+  const setTheme = (nextTheme: Theme) => setThemeState(nextTheme);
 
-  /** 应用自定义主题（CSS 变量覆盖） */
-  const applyCustomTheme = useCallback((themeDef: ThemeDefinition) => {
-    applyThemeVars(themeDef);
-    setActiveThemeId(themeDef.id);
-    localStorage.setItem(THEME_ID_KEY, themeDef.id);
-  }, []);
+  const applyCustomTheme = useCallback(async (themeDefinition: ThemeDefinition) => {
+    await applyThemeDefinition(themeDefinition, theme);
+    setActiveThemeId(themeDefinition.id);
+  }, [theme]);
 
-  /** 预览主题（临时应用，不持久化 activeThemeId）。调 revertPreview 恢复。 */
-  const previewTheme = useCallback((themeDef: ThemeDefinition) => {
-    applyThemeVars(themeDef);
-  }, []);
+  const previewTheme = useCallback(async (themeDefinition: ThemeDefinition) => {
+    await applyThemeDefinition(themeDefinition, theme, false);
+  }, [theme]);
 
-  /** 恢复到当前持久化的主题（取消预览） */
   const revertPreview = useCallback(() => {
-    // 重新应用 activeThemeId 对应的主题变量
-    const id = localStorage.getItem(THEME_ID_KEY) || "default-light";
-    // 清除当前预览变量后，由调用方重新 applyCustomTheme 或 reload
-    const root = document.documentElement;
-    const prev = localStorage.getItem(CUSTOM_VARS_KEY);
-    if (prev) {
-      try { JSON.parse(prev).forEach((key: string) => root.style.removeProperty(key)); } catch {}
-    }
-    setActiveThemeId(id);
+    clearThemeDefinition();
+    setActiveThemeId(getActiveThemeId());
   }, []);
 
-  const isDark =
-    theme === "dark" ||
-    (theme === "system" &&
-      typeof window !== "undefined" &&
-      window.matchMedia("(prefers-color-scheme: dark)").matches);
+  const isDark = theme === "dark" || (theme === "system" && typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches);
 
   return { theme, setTheme, isDark, activeThemeId, applyCustomTheme, previewTheme, revertPreview };
 }

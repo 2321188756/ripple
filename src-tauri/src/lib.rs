@@ -175,6 +175,7 @@ pub fn run() {
             commands::settings::set_setting,
             commands::settings::set_debug_logging,
             commands::settings::get_debug_logging,
+            commands::settings::list_available_models,
             commands::stats::get_usage_stats,
             commands::plugins::list_plugins,
             commands::plugins::toggle_plugin,
@@ -219,7 +220,8 @@ pub fn run() {
             commands::themes::import_theme,
             commands::themes::delete_theme,
             commands::themes::generate_theme,
-            commands::themes::generate_theme,
+            commands::themes::save_wallpaper,
+            commands::themes::read_wallpaper_base64,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

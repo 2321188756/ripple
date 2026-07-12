@@ -1,5 +1,6 @@
 import { memo } from "react";
-import { Check, MoreVertical, Download, Trash2, Pencil } from "lucide-react";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { Check, MoreVertical, Download, Trash2, Pencil, ImagePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
@@ -14,15 +15,19 @@ interface ThemeCardProps {
   onApply: (theme: ThemeDefinition) => void;
   onExport: (theme: ThemeDefinition) => void;
   onDelete: (theme: ThemeDefinition) => void;
+  onSetWallpaper?: (theme: ThemeDefinition) => void;
 }
 
-/** 主题卡片：色块预览 + 名称 + 应用按钮 + 更多菜单 */
+/** 主题卡片：色块预览 + 名称 + 应用按钮 + 更多菜单。点击「应用」生效。 */
 export const ThemeCard = memo(function ThemeCard({
-  theme, isActive, isDark, onApply, onExport, onDelete,
+  theme, isActive, isDark, onApply, onExport, onDelete, onSetWallpaper,
 }: ThemeCardProps) {
   const palette = isDark ? theme.colors.dark : theme.colors.light;
   const hsl = (key: string) => `hsl(${palette[key] || "0 0% 50%"})`;
   const isBuiltin = theme.isBuiltin;
+  const wallpaperStyle = theme.wallpaper
+    ? { backgroundImage: `url(${convertFileSrc(theme.wallpaper)})`, backgroundSize: "cover", backgroundPosition: "center" }
+    : {};
 
   return (
     <div
@@ -31,8 +36,8 @@ export const ThemeCard = memo(function ThemeCard({
         isActive ? "border-warning ring-2 ring-warning/40" : "border-border",
       )}
     >
-      {/* 色块预览：模拟 App 界面 */}
-      <div className="relative h-28 p-2.5" style={{ background: hsl("--background") }}>
+      {/* 色块预览：模拟 App 界面（有壁纸则叠加壁纸） */}
+      <div className="relative h-28 p-2.5" style={{ background: hsl("--background"), ...wallpaperStyle }}>
         {/* 模拟侧边栏 */}
         <div className="absolute left-0 top-0 bottom-0 w-1/4" style={{ background: hsl("--sidebar-background") }} />
         {/* 模拟消息气泡 */}
@@ -41,6 +46,12 @@ export const ThemeCard = memo(function ThemeCard({
           <div className="h-3 w-1/2 rounded-full" style={{ background: hsl("--card"), border: `1px solid ${hsl("--border")}` }} />
           <div className="h-3 w-2/3 rounded-full" style={{ background: hsl("--primary"), opacity: 0.9 }} />
         </div>
+        {/* 壁纸标记 */}
+        {theme.wallpaper && (
+          <span className="absolute top-1.5 left-1.5 text-[9px] px-1.5 py-0.5 rounded bg-black/50 text-white flex items-center gap-0.5">
+            <ImagePlus className="w-2 h-2" /> 壁纸
+          </span>
+        )}
         {/* 内置角标 */}
         {isBuiltin && (
           <span className="absolute top-1.5 right-1.5 text-[9px] px-1.5 py-0.5 rounded bg-muted/80 text-muted-foreground">
@@ -79,6 +90,11 @@ export const ThemeCard = memo(function ThemeCard({
             <DropdownMenuItem onClick={() => onExport(theme)}>
               <Download className="w-3 h-3 mr-2" /> 导出
             </DropdownMenuItem>
+            {onSetWallpaper && (
+              <DropdownMenuItem onClick={() => onSetWallpaper(theme)}>
+                <ImagePlus className="w-3 h-3 mr-2" /> 设置壁纸
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem disabled>
               <Pencil className="w-3 h-3 mr-2" /> 编辑
             </DropdownMenuItem>

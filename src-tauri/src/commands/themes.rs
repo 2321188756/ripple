@@ -27,6 +27,12 @@ pub struct ThemeDefinition {
     pub is_builtin: Option<bool>,
     pub colors: ThemeColors,
     pub agent_style: Option<AgentThemeStyle>,
+    /// 背景壁纸文件绝对路径（可选）。前端用 convertFileSrc 转成 webview 可访问 URL。
+    #[serde(default)]
+    pub wallpaper: Option<String>,
+    /// 壁纸遮罩不透明度 0-100（0=全透壁纸全亮，100=全暗），默认 60。
+    #[serde(default)]
+    pub wallpaper_darkness: Option<f64>,
 }
 
 /// 内建主题
@@ -63,6 +69,8 @@ fn builtin_themes() -> Vec<ThemeDefinition> {
                 border_width: Some(2.0),
                 name_color: Some("#1e293b".into()),
             }),
+            wallpaper: None,
+            wallpaper_darkness: None,
         },
         ThemeDefinition {
             id: "midnight".into(),
@@ -90,6 +98,8 @@ fn builtin_themes() -> Vec<ThemeDefinition> {
                 border_width: Some(2.0),
                 name_color: Some("#e2e8f0".into()),
             }),
+            wallpaper: None,
+            wallpaper_darkness: None,
         },
         ThemeDefinition {
             id: "nature".into(),
@@ -118,6 +128,8 @@ fn builtin_themes() -> Vec<ThemeDefinition> {
                 border_width: Some(2.0),
                 name_color: Some("#166534".into()),
             }),
+            wallpaper: None,
+            wallpaper_darkness: None,
         },
     ]
 }
@@ -284,30 +296,26 @@ async fn call_llm_for_theme(
     api_base_url: &str,
     api_key: &str,
     model: &str,
-    keyword: &str,
+    prompt: &str,
+    image: Option<&str>,
 ) -> Result<String, String> {
-    let prompt = r##"你是 UI 主题设计师。根据关键词「__KW__」为桌面 AI 助手应用生成 3 套完整主题。
-返回纯 JSON 数组（不要 markdown 代码块、不要解释），每个元素结构：
-{"id":"ai-x","name":"主题名（中文，2-4字）","description":"简短描述","isBuiltin":false,"colors":{"light":{"--background":"H S% L%","--foreground":"H S% L%","--primary":"H S% L%","--card":"H S% L%","--border":"H S% L%","--muted":"H S% L%","--sidebar-background":"H S% L%"},"dark":{"--background":"H S% L%","--foreground":"H S% L%","--primary":"H S% L%","--card":"H S% L%","--border":"H S% L%","--muted":"H S% L%","--sidebar-background":"H S% L%"}},"agentStyle":{"icon_color":"HEXCOLOR","border_color":"HEXCOLOR","border_width":2,"name_color":"HEXCOLOR"}}
-
-规则：
-1. 颜色用 HSL 格式 "H S% L%"（如 "210 20% 95%"），H 为 0-360，S/L 为百分比
-2. 前景色与背景色对比度 ≥ 4.5:1（WCAG AA）
-3. 暗色模式：背景 L ≤ 15%，前景 L ≥ 85%；浅色模式：背景 L ≥ 90%，前景 L ≤ 20%
-4. primary 主色与 background 区分明显
-5. 3 套主题风格要有差异（如明快/沉稳/对比）
-6. agentStyle 的颜色用 #hex 格式（如 #6366f1），与主题协调
-7. 只返回 JSON 数组，不要任何其他文字"##.replace("__KW__", keyword);
-
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| format!("build client: {e}"))?;
+    // 有图片时用多模态消息（vision 模型分析图片配色），否则纯文本
+    let content: serde_json::Value = match image {
+        Some(img) => serde_json::json!([
+            { "type": "text", "text": prompt },
+            { "type": "image_url", "image_url": { "url": format!("data:image/jpeg;base64,{}", img) } }
+        ]),
+        None => serde_json::json!(prompt),
+    };
     let body = serde_json::json!({
         "model": model,
-        "messages": [{ "role": "user", "content": prompt }],
-        "max_tokens": 2500,
-        "temperature": 0.85,
+        "messages": [{ "role": "user", "content": content }],
+        "max_tokens": 3000,
+        "temperature": 0.75,
     });
     let resp = client
         .post(format!("{}/chat/completions", api_base_url.trim_end_matches('/')))
@@ -322,23 +330,34 @@ async fn call_llm_for_theme(
         return Err(format!("llm http {status}: {b}"));
     }
     let json: serde_json::Value = resp.json().await.map_err(|e| format!("parse: {e}"))?;
-    let reply = json["choices"][0]["message"]["content"]
-        .as_str()
-        .ok_or("LLM 未返回内容")?;
+    let msg = &json["choices"][0]["message"];
+    // 优先 content；推理模型（deepseek/gemini）可能把内容放 reasoning_content 而 content 为空
+    let reply = msg["content"].as_str()
+        .filter(|s| !s.is_empty())
+        .or_else(|| msg["reasoning_content"].as_str())
+        .ok_or_else(|| {
+            let raw = serde_json::to_string(&json).unwrap_or_default();
+            let head: String = raw.chars().take(400).collect();
+            format!("LLM 未返回内容，原始响应: {head}")
+        })?;
+    tracing::debug!(reply_len = reply.len(), "LLM theme reply");
     Ok(reply.to_string())
 }
 
-/// AI 生成主题：根据关键词调 LLM 生成 3 套候选主题，校验补全后返回。
+/// AI 生成主题：根据需求描述调 LLM 生成 3 套候选主题，校验补全后返回。
+/// model_override 非空则用指定模型，否则用 settings 的 llm_model。
 #[tauri::command]
 pub async fn generate_theme(
     state: State<'_, AppState>,
-    keyword: String,
+    prompt: String,
+    model_override: Option<String>,
+    image: Option<String>,
 ) -> Result<Vec<ThemeDefinition>, String> {
-    if keyword.trim().is_empty() {
-        return Err("关键词不能为空".into());
+    if prompt.trim().is_empty() {
+        return Err("需求描述不能为空".into());
     }
-    // 读凭证
-    let (api_key, api_base_url, model) = {
+    // 读凭证 + 默认模型
+    let (api_key, api_base_url, default_model) = {
         let conn = state.db.get_timeout(Duration::from_secs(3)).map_err(|e| e.to_string())?;
         let ak: String = conn.query_row("SELECT value FROM settings WHERE key='api_key'", [], |r| r.get(0)).unwrap_or_default();
         let au: String = conn.query_row("SELECT value FROM settings WHERE key='api_base_url'", [], |r| r.get(0)).unwrap_or_else(|_| "http://192.168.0.123:3000/v1".into());
@@ -349,11 +368,18 @@ pub async fn generate_theme(
     if api_key.is_empty() {
         return Err("未配置 API Key，请在设置中配置".into());
     }
+    let model = model_override
+        .filter(|s| !s.is_empty())
+        .unwrap_or(default_model);
 
-    let raw = call_llm_for_theme(&api_base_url, &api_key, &model, &keyword).await?;
+    let raw = call_llm_for_theme(&api_base_url, &api_key, &model, &prompt, image.as_deref()).await?;
     let json_str = extract_json_array(&raw);
+    if json_str.trim().is_empty() {
+        let head: String = raw.chars().take(400).collect();
+        return Err(format!("LLM 返回空内容（可能 reasoning 耗尽 token 或模型异常），原始: {head}"));
+    }
     let mut themes: Vec<ThemeDefinition> = serde_json::from_str(&json_str)
-        .map_err(|e| format!("解析主题 JSON 失败: {e}"))?;
+        .map_err(|e| format!("解析主题 JSON 失败: {e}\n原始(前300字): {}", json_str.chars().take(300).collect::<String>()))?;
 
     // 覆盖 id 确保唯一 + 校验补全
     let ts = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
@@ -368,6 +394,53 @@ pub async fn generate_theme(
     if themes.is_empty() {
         return Err("LLM 未生成有效主题".into());
     }
-    tracing::info!(keyword = %keyword, count = themes.len(), "AI themes generated");
+    tracing::info!(prompt = %prompt, model = %model, count = themes.len(), "AI themes generated");
     Ok(themes)
+}
+
+/// 壁纸目录：用户主目录下的 ripple_wallpapers/
+fn wallpaper_dir() -> std::path::PathBuf {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    home.join("ripple_wallpapers")
+}
+
+/// 保存壁纸：把用户选择的图片复制到 ~/ripple_wallpapers/，返回目标绝对路径。
+/// 主题的 wallpaper 字段存这个路径，前端用 convertFileSrc 显示。
+#[tauri::command]
+pub async fn save_wallpaper(src_path: String, theme_id: String) -> Result<String, String> {
+    let dir = wallpaper_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create wallpaper dir: {e}"))?;
+    let src = std::path::Path::new(&src_path);
+    let ext = src.extension().and_then(|s| s.to_str()).unwrap_or("png");
+    // 文件名：theme_id + 时间戳，避免冲突
+    let ts = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
+    let dest = dir.join(format!("{}_{}.{}", theme_id, ts, ext));
+    std::fs::copy(src, &dest).map_err(|e| format!("copy wallpaper: {e}"))?;
+    let path = dest.to_string_lossy().to_string();
+    tracing::info!(%path, "wallpaper saved");
+    Ok(path)
+}
+
+/// 读取壁纸文件并返回 base64 data URL（供前端直接设 backgroundImage，避免 asset protocol / fs 权限问题）。
+#[tauri::command]
+pub async fn read_wallpaper_base64(path: String) -> Result<String, String> {
+    use base64::Engine as _;
+    let data = std::fs::read(&path).map_err(|e| format!("read wallpaper: {e}"))?;
+    let ext = std::path::Path::new(&path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("jpg")
+        .to_lowercase();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        _ => "image/jpeg",
+    };
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+    Ok(format!("data:{};base64,{}", mime, b64))
 }

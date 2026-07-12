@@ -15,7 +15,7 @@ function applyTheme(theme: Theme) {
   root.classList.toggle("dark", isDark);
 }
 
-/** 将主题的 CSS 变量应用到 :root / .dark */
+/** 将主题的 CSS 变量应用到 :root / .dark，并设置背景壁纸（如有） */
 function applyThemeVars(themeDef: ThemeDefinition | null) {
   const root = document.documentElement;
   // 清除之前应用的自定义变量
@@ -23,6 +23,12 @@ function applyThemeVars(themeDef: ThemeDefinition | null) {
   if (prev) {
     try { JSON.parse(prev).forEach((key: string) => root.style.removeProperty(key)); } catch {}
   }
+  // 清除壁纸（body 是壁纸层，backdrop-filter 需要和 body 同合成层才能生效）
+  document.body.style.backgroundImage = "";
+  document.body.style.backgroundSize = "";
+  document.body.style.backgroundPosition = "";
+  document.body.style.backgroundAttachment = "";
+  document.body.classList.remove("has-wallpaper");
   if (!themeDef) return;
   const vars: string[] = [];
   for (const [key, val] of Object.entries(themeDef.colors.light || {})) {

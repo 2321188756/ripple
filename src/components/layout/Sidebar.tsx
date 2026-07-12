@@ -47,7 +47,7 @@ export function Sidebar({ ipcOk, onOpenSettings }: SidebarProps) {
       role="complementary"
       aria-label="侧边栏"
       className={cn(
-        "border-r border-sidebar-border flex flex-col bg-sidebar text-sidebar-foreground transition-all duration-200",
+        "border-r border-sidebar-border flex flex-col bg-glass-sidebar text-sidebar-foreground transition-all duration-200",
         sidebarOpen ? "w-64" : "w-12",
       )}
     >

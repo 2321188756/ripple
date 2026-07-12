@@ -61,7 +61,7 @@ export function ChatHeader({
   };
 
   return (
-    <header className="h-12 border-b border-border flex items-center px-4 gap-2.5 bg-gradient-to-r from-background via-background to-primary/3">
+    <header className="h-12 border-b border-border flex items-center px-4 gap-2.5 bg-glass">
       {/* Logo */}
       <div className="flex items-center gap-2 mr-1">
         <AppLogo size="md" />

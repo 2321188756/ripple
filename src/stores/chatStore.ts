@@ -10,7 +10,6 @@ import type {
   StreamChunkPayload,
   GenCompletePayload,
   GenErrorPayload,
-  ToolCallEvent,
   ApprovalRequestEvent,
 } from "@/types";
 
@@ -26,7 +25,6 @@ interface ChatState {
   conversations: Conversation[];
   activeId: string | null;
   messages: Record<string, Message[]>;
-  toolEvents: Record<string, ToolCallEvent[]>; // conversation_id → tool call events
   agentMode: boolean;
   streamingText: string | null;
   streamingMsgId: string | null;
@@ -41,7 +39,6 @@ interface ChatState {
 
   setError: (msg: string) => void;
   clearError: () => void;
-  addToolEvent: (conversationId: string, event: ToolCallEvent) => void;
   addApprovalRequest: (req: ApprovalRequestEvent) => void;
   resolveApproval: (requestId: string, approved: boolean, trustTool: boolean) => Promise<void>;
   toggleAgentMode: () => void;
@@ -73,7 +70,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   conversations: [],
   activeId: null,
   messages: {},
-  toolEvents: {},
   agentMode: false,
   streamingText: null,
   streamingMsgId: null,
@@ -190,8 +186,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...s.messages,
         [aid]: [...(s.messages[aid] || []), userMsg],
       },
-      // 新轮次开始：清空上一轮的工具调用卡片，避免跨轮次累积后堆到错误位置
-      toolEvents: { ...s.toolEvents, [aid]: [] },
       // 缓存请求供错误重试
       lastRequest: { type: "send", content, images: images && images.length > 0 ? images : undefined, userMsgId: userMsg.id, conversationId: aid },
     }));
@@ -330,13 +324,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!cid) { set({ error: "No active conversation" }); return; }
     if (state.streamingText !== null) return;
 
-    // 本地截断 messageId 及其后的消息（与后端 delete_from 对齐）。
-    // 否则流式完成后新回复 append 到旧回复后面，出现 [user, 旧回复, 新回复] 重复。
+    // 本地截断 messageId 之后的消息（含 messageId 本身）。
+    // 后端 delete_from 用 rowid > 只删后面的，保留选中消息本身。
+    // slice(0, idx + 1) 保留选中消息，仅去掉后面的。
     set((s) => {
       const msgs = s.messages[cid] || [];
       const idx = msgs.findIndex((m) => m.id === messageId);
       if (idx < 0) return {};
-      return { messages: { ...s.messages, [cid]: msgs.slice(0, idx) } };
+      // user 消息保留本身（idx+1），assistant 消息删除本身（idx）
+      const keep = msgs[idx]?.role === "user" ? idx + 1 : idx;
+      return { messages: { ...s.messages, [cid]: msgs.slice(0, keep) } };
     });
 
     // 先标记流式开始，使首块竞态期间能锁存 message_id
@@ -421,13 +418,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   clearError: () => set({ error: null }),
 
   toggleAgentMode: () => set((s) => ({ agentMode: !s.agentMode })),
-
-  addToolEvent: (conversationId: string, event: ToolCallEvent) => {
-    set((s) => {
-      const existing = s.toolEvents[conversationId] || [];
-      return { toolEvents: { ...s.toolEvents, [conversationId]: [...existing, event] } };
-    });
-  },
 
   addApprovalRequest: (req: ApprovalRequestEvent) => {
     set((s) => ({ pendingApprovals: [...s.pendingApprovals, req] }));

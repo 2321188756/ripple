@@ -44,7 +44,7 @@ export const CONTEXT_DEFAULTS: {
   maxTokens: string;
 } = {
   enabled: true,
-  recentWindow: "20",
-  summaryInterval: "10",
-  maxTokens: "32000",
+  recentWindow: "50",
+  summaryInterval: "15",
+  maxTokens: "64000",
 };

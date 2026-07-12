@@ -99,6 +99,18 @@ a {
   color: hsl(var(--foreground));
 }
 
+/* === 磨砂玻璃（Mica/Glass，参考 VCP --glass-blur 变量） === */
+.bg-glass {
+  background-color: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+.bg-glass-sidebar {
+  background-color: var(--glass-sidebar-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
 /* 全局过渡：交互元素统一 ease-out，避免生硬 */
 button,
 a,

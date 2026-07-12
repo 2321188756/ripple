@@ -42,10 +42,10 @@ export const MessageBubble = memo(function MessageBubble({ role, content }: Mess
       )}
       <div
         className={cn(
-          "max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed animate-fade-in",
           isUser
-            ? "bg-primary text-primary-foreground shadow-md shadow-primary/20 rounded-br-md"
-            : "bg-card border border-border text-card-foreground shadow-sm rounded-bl-md",
+            ? "max-w-[80%] bg-primary text-primary-foreground shadow-md shadow-primary/20 rounded-br-md"
+            : "max-w-[98%] bg-card border border-border text-card-foreground shadow-sm rounded-bl-md",
+          "rounded-2xl px-4 py-2.5 text-sm leading-relaxed animate-fade-in",
         )}
       >
         {/* 图片渲染 */}

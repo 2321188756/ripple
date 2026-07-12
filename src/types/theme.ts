@@ -15,6 +15,8 @@ export interface ThemeDefinition {
   isBuiltin?: boolean;
   colors: ThemeColors;
   agentStyle?: AgentThemeStyle;
+  /** 背景壁纸文件绝对路径（可选，前端用 convertFileSrc 转 URL） */
+  wallpaper?: string;
 }
 
 export interface ThemeColors {

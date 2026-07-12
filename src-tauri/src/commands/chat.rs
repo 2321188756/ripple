@@ -359,33 +359,41 @@ pub async fn regenerate(
     drop(conn);
     tracing::debug!("regenerate: after get_conversation");
 
-    // 2. 删除 message_id 之后的所有消息（含本身）
-    //    delete_from 在 message_id 不存在时返回 NotFound —— 必须在此报错，
-    //    否则后续会基于未截断的历史重生成，且掩盖前端传错 id 的问题。
+    // 2. 删除 message_id 之后的所有消息（不含本消息）
+    //    delete_from 用 rowid > 保留选中消息本身。
     {
         let conn = db_conn!(state);
         if let Err(e) = ripple_conversation_store::MessageRepo::delete_from(&conn, &conversation_id, &message_id) {
             tracing::warn!(error = %e, "regenerate delete_from failed");
             return Err(format!("regenerate: cannot locate message {message_id}: {e}"));
         }
+        // 如果选中的是 assistant 消息，还要删除消息本身（重新生成它）
+        let role: Option<String> = conn.query_row(
+            "SELECT role FROM messages WHERE id = ?1", [&message_id], |r| r.get(0),
+        ).ok();
+        if role.as_deref() == Some("assistant") {
+            conn.execute("DELETE FROM messages WHERE id = ?1", [&message_id])
+                .map_err(|e| e.to_string())?;
+        }
     }
     tracing::debug!("regenerate: after delete_from");
 
     // 3. 加载剩余历史
     let conn = db_conn!(state);
-    let history = ripple_conversation_store::MessageRepo::list_by_conversation(&conn, &conversation_id, 50, None).unwrap_or_default();
+    let mut history = ripple_conversation_store::MessageRepo::list_by_conversation(&conn, &conversation_id, 50, None).unwrap_or_default();
     drop(conn);
 
-    // 4. 获取最后一条 user 消息的内容
-    let last_user_content = history.iter()
-        .rev()
-        .find(|m| m.role == MessageRole::User)
-        .map(|m| m.text())
-        .unwrap_or_default();
-    if last_user_content.is_empty() {
+    // 4. 获取最后一条 user 消息的内容并移除（避免 do_chat_stream_inner 重复添加用户消息，
+    //    导致 LLM 收到两条相同用户消息 → 重复生成上条 Agent 回复）
+    let pos = history.iter().rposition(|m| m.role == MessageRole::User);
+    let user_msg = match pos {
+        Some(i) => history.remove(i),
+        None => return Err("No user message found to regenerate from".into()),
+    };
+    let content = user_msg.text();
+    if content.is_empty() {
         return Err("No user message found to regenerate from".into());
     }
-    let content = last_user_content;
 
     // 5. 知识库注入 + 设置
     let kb_inject = inject_knowledge(&content, &state, &api_key).await;
@@ -503,6 +511,11 @@ async fn request_tool_approval(
     }
 }
 
+/// 对简单的 HTML 特殊字符做转义，防止工具输出中的 &<> 破坏嵌入的 HTML 结构。
+fn html_escape(s: &str) -> String {
+    s.chars().map(|c| match c { '&' => "&amp;".into(), '<' => "&lt;".into(), '>' => "&gt;".into(), _ => c.to_string() }).collect()
+}
+
 async fn chat_with_tools(
     app: &AppHandle,
     provider: &OpenAiProvider,
@@ -602,7 +615,7 @@ async fn chat_with_tools(
 
         // Assistant 消息（含 tool_call）
         let mut blocks: Vec<ContentBlock> = Vec::new();
-        if !local_text.is_empty() { blocks.push(ContentBlock::Text { text: local_text }); }
+        if !local_text.is_empty() { blocks.push(ContentBlock::Text { text: local_text.clone() }); }
         for (_, tc) in &tool_calls {
             blocks.push(ContentBlock::ToolCall {
                 id: tc.id.clone().unwrap_or_default(),
@@ -639,7 +652,7 @@ async fn chat_with_tools(
                                 content: vec![ContentBlock::ToolResult { tool_call_id: tid, content: output.clone() }],
                             });
                             let _ = app.emit("chat:tool-call", serde_json::json!({
-                                "tool_name": name, "tool_input": tc.arguments, "tool_output": output, "status": "rejected"
+                                "tool_name": name, "tool_input": tc.arguments, "tool_output": output, "status": "rejected", "message_id": message_id
                             }));
                             tracing::info!(tool = %name, "tool call rejected by user");
                             continue;
@@ -652,7 +665,7 @@ async fn chat_with_tools(
                                 content: vec![ContentBlock::ToolResult { tool_call_id: tid, content: output.clone() }],
                             });
                             let _ = app.emit("chat:tool-call", serde_json::json!({
-                                "tool_name": name, "tool_input": tc.arguments, "tool_output": output, "status": "error"
+                                "tool_name": name, "tool_input": tc.arguments, "tool_output": output, "status": "error", "message_id": message_id
                             }));
                             tracing::warn!(tool = %name, error = %e, "tool approval failed");
                             continue;
@@ -688,8 +701,26 @@ async fn chat_with_tools(
                 content: vec![ContentBlock::ToolResult { tool_call_id: tid, content: output.clone() }],
             });
 
-            let payload = serde_json::json!({ "tool_name": name, "tool_input": tc.arguments, "tool_output": output, "status": status });
+            let payload = serde_json::json!({ "tool_name": name, "tool_input": tc.arguments, "tool_output": output, "status": status, "message_id": message_id });
             let _ = app.emit("chat:tool-call", payload);
+
+            // 把工具结果以 HTML 形式嵌入到流式输出中（前端 rehype-raw 渲染），而非独立 ToolCallCard
+            if status == "success" {
+                let html_output = html_escape(&output);
+                let tool_html = format!(
+                    "\n\n<div style=\"background: hsl(var(--muted)); border: 1px solid hsl(var(--border)); border-radius: 8px; padding: 12px; margin: 8px 0;\">\n\
+                    <div style=\"font-size: 11px; color: hsl(var(--muted-foreground)); margin-bottom: 6px;\">🔧 {} 结果</div>\n\
+                    <pre style=\"margin: 0; font-size: 13px; line-height: 1.5; overflow-x: auto;\"><code>{}</code></pre>\n\
+                    </div>\n",
+                    name, html_output,
+                );
+                local_text.push_str(&tool_html);
+                let _ = app.emit("chat:stream-chunk", serde_json::json!({
+                    "conversation_id": conversation_id,
+                    "message_id": message_id,
+                    "text": tool_html,
+                }));
+            }
         }
     }
 

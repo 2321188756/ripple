@@ -69,10 +69,52 @@ export function ThemeWorkshop({ open, onOpenChange }: ThemeWorkshopProps) {
     return () => { unlisten.then((f) => f()).catch(() => {}); };
   }, [open, importFromPath]);
 
-  const handleApply = useCallback((theme: ThemeDefinition) => {
+  const handleApply = useCallback(async (theme: ThemeDefinition) => {
     applyCustomTheme(theme);
     setActiveId(theme.id);
+    // 如果主题有壁纸，同步加载显示（Mica 磨砂：壁纸在 html 层，UI 层 backdrop-filter 模糊透过）
+    if (theme.wallpaper) {
+      try {
+        const dataUrl = await themeService.readWallpaperBase64(theme.wallpaper);
+        document.body.style.backgroundImage = `url(${dataUrl})`;
+        document.body.style.backgroundSize = "cover";
+        document.body.style.backgroundPosition = "center";
+        document.body.style.backgroundAttachment = "fixed";
+        document.body.classList.add("has-wallpaper");
+      } catch (e) { console.error("wallpaper load error:", e); }
+    }
   }, [applyCustomTheme]);
+
+  /** 设置壁纸：选图片 -> 复制到壁纸目录 -> 更新主题 -> 同步显示壁纸 */
+  const handleSetWallpaper = useCallback(async (theme: ThemeDefinition) => {
+    const path = await openDialog({
+      multiple: false,
+      filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
+    });
+    if (!path) return;
+    try {
+      const wpPath = await themeService.saveWallpaper(path as string, theme.id);
+      const all = await themeService.list();
+      const idx = all.findIndex((t) => t.id === theme.id);
+      if (idx >= 0) {
+        all[idx] = { ...all[idx], wallpaper: wpPath };
+        await themeService.saveAll(all);
+        await load();
+        // 同步读取壁纸并显示（await 确保画上去后再返回，不依赖 applyThemeVars 的异步）
+        if (theme.id === activeId) {
+          const updated = all[idx];
+          applyCustomTheme(updated);
+          // Mica 磨砂：壁纸在 html 层
+          const dataUrl = await themeService.readWallpaperBase64(wpPath);
+          document.body.style.backgroundImage = `url(${dataUrl})`;
+          document.body.style.backgroundSize = "cover";
+          document.body.style.backgroundPosition = "center";
+          document.body.style.backgroundAttachment = "fixed";
+          document.body.classList.add("has-wallpaper");
+        }
+      }
+    } catch (e) { alert(`设置壁纸失败: ${e}`); }
+  }, [activeId, applyCustomTheme, load]);
 
   const handleExport = useCallback(async (theme: ThemeDefinition) => {
     const path = await saveDialog({
@@ -154,10 +196,26 @@ export function ThemeWorkshop({ open, onOpenChange }: ThemeWorkshopProps) {
                     onApply={handleApply}
                     onExport={handleExport}
                     onDelete={handleDelete}
+                    onSetWallpaper={handleSetWallpaper}
                   />
                 ))}
               </div>
             )}
+
+            {/* Mica 磨砂提示：有壁纸的主题自动使用 backdrop-filter 模糊效果，无需遮罩层 */}
+            {(() => {
+              const active = themes.find((t) => t.id === activeId);
+              if (!active?.wallpaper) return null;
+              return (
+                <div className="mt-4 p-3 rounded-lg border border-border bg-card/70">
+                  <div className="text-xs font-medium mb-2">壁纸已启用 (Mica 磨砂)</div>
+                  <p className="text-[10px] text-muted-foreground">
+                    侧边栏、头部、输入区等大面积表面使用 <code className="text-primary">backdrop-filter: blur(40px)</code> 磨砂玻璃效果。
+                    壁纸以模糊染色形式均匀透过，无需半透明 UI 或遮罩层，文字依然清晰可读。
+                  </p>
+                </div>
+              );
+            })()}
           </div>
         </ScrollArea>
 

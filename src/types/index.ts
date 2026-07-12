@@ -56,6 +56,8 @@ export interface ToolCallEvent {
   tool_input: string;
   tool_output: string;
   status: "success" | "error" | "rejected";
+  /** 触发此工具调用的 assistant 消息 ID */
+  message_id: string;
 }
 
 // 工具审批请求（chat:tool-approval-request 载荷）

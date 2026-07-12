@@ -18,6 +18,14 @@ def load_config():
         return {}
 
 
+def _decode_bytes(data: bytes) -> str:
+    """优先 UTF-8 解码，失败回退 GBK（Windows 中文系统常见子进程输出编码）。"""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode("gbk", errors="replace")
+
+
 def main():
     raw = sys.stdin.readline().strip()
     try:
@@ -41,17 +49,21 @@ def main():
 
     try:
         if BASH:
+            # 取原始字节，智能解码：优先 UTF-8，失败回退 GBK（Windows 中文系统默认）
             result = subprocess.run(
                 [BASH, "-c", command], cwd=cwd,
-                capture_output=True, text=True,
-                timeout=timeout, encoding="utf-8", errors="replace",
+                capture_output=True, text=False, timeout=timeout,
             )
+            stdout = _decode_bytes(result.stdout)
+            stderr = _decode_bytes(result.stderr)
         else:
             result = subprocess.run(
                 command, shell=True, cwd=cwd,
                 capture_output=True, text=True,
                 timeout=timeout, encoding="utf-8", errors="replace",
             )
+            stdout = result.stdout or ""
+            stderr = result.stderr or ""
     except subprocess.TimeoutExpired:
         print(json.dumps({"error": f"timeout after {timeout}s (command killed)"}, ensure_ascii=False))
         return
@@ -59,8 +71,6 @@ def main():
         print(json.dumps({"error": f"exec failed: {e}"}, ensure_ascii=False))
         return
 
-    stdout = result.stdout or ""
-    stderr = result.stderr or ""
     if len(stdout) > max_output:
         stdout = stdout[:max_output] + "\n[...truncated]"
     if len(stderr) > max_output:

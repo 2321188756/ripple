@@ -8,8 +8,7 @@ import { ContextMenu } from "@/components/common/ContextMenu";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useChatStore } from "@/stores/chatStore";
-import ToolCallCard from "@/components/ToolCallCard";
-import type { Message, ToolCallEvent } from "@/types";
+import type { Message } from "@/types";
 
 interface VirtualMessageListProps {
   messagesEndRef: React.RefObject<HTMLDivElement | null>;
@@ -17,7 +16,6 @@ interface VirtualMessageListProps {
 
 type Item =
   | { key: string; type: "msg"; data: Message }
-  | { key: string; type: "tool"; data: ToolCallEvent }
   | { key: string; type: "stream"; data: string };
 
 /** 虚拟滚动消息列表 + 右键菜单 + 内联编辑 */
@@ -27,7 +25,6 @@ export const VirtualMessageList = memo(function VirtualMessageList({
   // 精确订阅当前对话的消息/工具事件/流式文本。流式文本每 token 变化只重渲染本组件，
   // 不再经 App 向下传导导致 Sidebar/ChatHeader/ChatInputArea 全树重渲染。
   const messages = useChatStore((s) => (s.activeId ? s.messages[s.activeId] : undefined)) ?? [];
-  const toolEvents = useChatStore((s) => (s.activeId ? s.toolEvents[s.activeId] : undefined)) ?? [];
   const streamingText = useChatStore((s) => s.streamingText);
 
   // 右键菜单
@@ -92,26 +89,15 @@ export const VirtualMessageList = memo(function VirtualMessageList({
 
   const items = useMemo<Item[]>(() => {
     const list: Item[] = [];
-    // 工具调用属于「当前轮次」——插到最后一条 user 消息之后。
-    // 早期版本用 toolsInserted 标志插到「第一条后接非 user 的 user 消息」之后，
-    // 多轮对话中会把所有累积的工具卡片都堆到第一轮下方。
-    let lastUserIdx = -1;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "user") { lastUserIdx = i; break; }
-    }
     for (let i = 0; i < messages.length; i++) {
       list.push({ key: messages[i].id, type: "msg", data: messages[i] });
-      if (i === lastUserIdx) {
-        for (let ti = 0; ti < toolEvents.length; ti++) {
-          list.push({ key: `tc-${ti}`, type: "tool", data: toolEvents[ti] });
-        }
-      }
     }
+    // 工具结果已嵌入到 AI 消息的 HTML 中（后端追加），不再渲染独立 ToolCallCard
     if (streamingText !== null) {
       list.push({ key: "__stream__", type: "stream", data: streamingText });
     }
     return list;
-  }, [messages, toolEvents, streamingText]);
+  }, [messages, streamingText]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -119,8 +105,8 @@ export const VirtualMessageList = memo(function VirtualMessageList({
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: (i) => (items[i]?.type === "tool" ? 100 : 80),
-    overscan: 5,
+    estimateSize: () => 80,
+    overscan: 10,
   });
 
   useEffect(() => {
@@ -190,10 +176,6 @@ export const VirtualMessageList = memo(function VirtualMessageList({
                   ) : (
                     <MessageBubble role={item.data.role} content={item.data.content} />
                   )
-                ) : item.type === "tool" ? (
-                  <div className="px-4 py-1">
-                    <ToolCallCard event={item.data} />
-                  </div>
                 ) : (
                   <StreamingMessage text={item.data} />
                 )}

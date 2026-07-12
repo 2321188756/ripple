@@ -151,7 +151,7 @@ function App() {
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex h-screen bg-background text-foreground">
+      <div className="flex h-screen text-foreground">
         <Sidebar ipcOk={ipcOk} onOpenSettings={openSettingsWindow} />
 
         <main role="main" className="flex-1 flex flex-col min-w-0">

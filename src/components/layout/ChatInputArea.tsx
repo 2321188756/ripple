@@ -110,7 +110,7 @@ export function ChatInputArea({ streaming, onSend, onStop }: ChatInputAreaProps)
     <>
       <div
         className={cn(
-          "p-4 border-t border-border bg-background transition-colors",
+          "p-4 border-t border-border bg-glass transition-colors",
           dragOver && "bg-primary/5",
         )}
         onDrop={handleDrop}

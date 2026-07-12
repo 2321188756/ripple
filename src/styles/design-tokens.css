@@ -74,6 +74,19 @@
     --text-xl: 1.5rem;      /* 24px */
     --text-2xl: 1.875rem;   /* 30px */
     --text-3xl: 2.25rem;    /* 36px */
+
+    /* === 磨砂玻璃（Mica/Glass） === */
+    --glass-blur: 20px;
+    --glass-saturate: 180%;
+    --glass-bg: hsl(var(--background) / 0.45);
+    --glass-sidebar-bg: hsl(var(--sidebar-background) / 0.45);
+
+    /* === OKLCH 色相预设（hueColors 模式） === */
+    --hue-primary: 230;
+    --primary-oklch-dark: oklch(0.68 0.16 var(--hue-primary));
+    --primary-oklch-light: oklch(0.68 0.16 var(--hue-primary));
+    --accent-oklch-dark: oklch(0.75 0.14 var(--hue-primary));
+    --accent-oklch-light: oklch(0.45 0.14 var(--hue-primary));
   }
 
   .dark {

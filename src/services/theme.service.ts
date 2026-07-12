@@ -22,7 +22,15 @@ export const themeService = {
   deleteTheme: (id: string): Promise<void> =>
     invokeWithTimeout<void>("delete_theme", { id }),
 
-  /** AI 根据关键词生成 3 套候选主题（后端调 LLM，可能耗时 10-30s） */
-  generate: (keyword: string): Promise<ThemeDefinition[]> =>
-    invokeWithTimeout<ThemeDefinition[]>("generate_theme", { keyword }, 90000),
+  /** AI 根据需求描述生成 3 套候选主题（prompt 为完整模板内容；image 为 base64 图片供 vision 模型取色） */
+  generate: (prompt: string, model?: string, image?: string): Promise<ThemeDefinition[]> =>
+    invokeWithTimeout<ThemeDefinition[]>("generate_theme", { prompt, modelOverride: model, image }, 90000),
+
+  /** 保存壁纸文件到 ~/ripple_wallpapers/，返回绝对路径 */
+  saveWallpaper: (srcPath: string, themeId: string): Promise<string> =>
+    invokeWithTimeout<string>("save_wallpaper", { srcPath, themeId }),
+
+  /** 读取壁纸文件并返回 data:image/...;base64,... URL */
+  readWallpaperBase64: (path: string): Promise<string> =>
+    invokeWithTimeout<string>("read_wallpaper_base64", { path }),
 };

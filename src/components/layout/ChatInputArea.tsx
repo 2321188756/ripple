@@ -36,6 +36,13 @@ export function ChatInputArea({ streaming, onSend, onStop }: ChatInputAreaProps)
     showMention, filtered, mentionIdx, detectMention, selectMention, handleKeyDown, hide,
   } = useMentionCompletion(mentionItems);
 
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "0px";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+  }, [input]);
+
   const readFile = useCallback((file: File) => {
     if (!file.type.startsWith("image/")) return;
     const reader = new FileReader();
@@ -110,37 +117,40 @@ export function ChatInputArea({ streaming, onSend, onStop }: ChatInputAreaProps)
     <>
       <div
         className={cn(
-          "p-4 border-t border-border bg-glass transition-colors",
-          dragOver && "bg-primary/5",
+          "border-t border-border bg-glass p-3 transition-colors sm:p-4",
+          dragOver && "bg-primary/10 ring-1 ring-inset ring-primary/30",
         )}
         onDrop={handleDrop}
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
       >
-        <div className="max-w-4xl mx-auto space-y-2">
+        <div className="mx-auto max-w-4xl space-y-2.5">
           {/* 图片预览区 */}
           {images.length > 0 && (
             <div className="flex gap-2 flex-wrap">
               {images.map((img) => (
-                <div key={img.id} className="group relative w-20 h-20 rounded-lg overflow-hidden border border-border bg-muted">
-                  <img
-                    src={img.dataUrl}
-                    alt={img.name}
-                    className="w-full h-full object-cover cursor-pointer"
-                    onClick={() => openPreview(img.dataUrl)}
-                  />
+                <div key={img.id} className="group relative h-20 w-20 overflow-hidden rounded-lg border border-border bg-muted shadow-xs">
                   <button
-                    className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-black/50 text-white flex items-center justify-center
-                               opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
-                    onClick={() => removeImage(img.id)}
+                    type="button"
+                    className="block h-full w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    onClick={() => openPreview(img.dataUrl)}
+                    aria-label={`预览图片：${img.name}`}
                   >
-                    <X className="w-3 h-3" />
+                    <img src={img.dataUrl} alt={img.name} className="h-full w-full object-cover" />
                   </button>
-                  <div className="absolute bottom-0.5 right-0.5 w-4 h-4 rounded bg-black/40 text-white flex items-center justify-center
-                                  opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
-                       onClick={() => openPreview(img.dataUrl)}>
-                    <Expand className="w-2.5 h-2.5" />
-                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="absolute right-0.5 top-0.5 bg-black/55 text-white opacity-0 shadow-sm transition-opacity hover:bg-black/75 hover:text-white focus-visible:opacity-100 group-hover:opacity-100"
+                    onClick={() => removeImage(img.id)}
+                    aria-label={`移除图片：${img.name}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                  <span className="pointer-events-none absolute bottom-1 right-1 flex h-5 w-5 items-center justify-center rounded bg-black/45 text-white opacity-0 transition-opacity group-hover:opacity-100">
+                    <Expand className="h-3 w-3" />
+                  </span>
                 </div>
               ))}
             </div>
@@ -167,26 +177,37 @@ export function ChatInputArea({ streaming, onSend, onStop }: ChatInputAreaProps)
                     }
                     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
                   }}
-                  placeholder="Enter 发送，Shift+Enter 换行，@ 引用知识库，拖拽/粘贴图片"
+                  placeholder="输入消息…"
                   rows={1}
-                  className="resize-none min-h-[44px] max-h-40 text-sm pr-8"
+                  className="min-h-[44px] max-h-40 resize-none overflow-y-auto py-3 pr-11 text-sm shadow-xs"
                   aria-label="消息输入框"
+                  aria-describedby="composer-shortcuts"
                 />
-                <button type="button" onClick={handleSelectFile}
-                  className="absolute right-2 bottom-2 text-muted-foreground hover:text-foreground transition-colors" title="添加图片">
-                  <ImagePlus className="w-4 h-4" />
-                </button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={handleSelectFile}
+                  className="absolute bottom-1.5 right-1.5 text-muted-foreground"
+                  aria-label="添加图片附件"
+                >
+                  <ImagePlus className="h-4 w-4" />
+                </Button>
               </div>
             </div>
             {streaming ? (
-              <Button variant="destructive" size="default" onClick={onStop} className="self-end h-11 px-5 rounded-xl shadow-sm">
-                <Square className="w-4 h-4 mr-1.5" />停止
+              <Button variant="destructive" size="default" onClick={onStop} className="h-11 self-end rounded-xl px-4 shadow-sm sm:px-5">
+                <Square className="mr-1.5 h-4 w-4" />停止
               </Button>
             ) : (
-              <Button size="default" onClick={handleSend} disabled={!hasContent} className="self-end h-11 px-5 rounded-xl shadow-sm">
-                <Send className="w-4 h-4 mr-1.5" />发送
+              <Button size="default" onClick={handleSend} disabled={!hasContent} className="h-11 self-end rounded-xl px-4 shadow-sm sm:px-5">
+                <Send className="mr-1.5 h-4 w-4" />发送
               </Button>
             )}
+          </div>
+          <div id="composer-shortcuts" className="flex items-center justify-between px-1 text-[11px] text-muted-foreground">
+            <span>@ 可引用知识库 · 支持拖拽、粘贴或添加图片</span>
+            <span><kbd className="rounded border border-border bg-muted px-1 py-0.5 font-sans">Enter</kbd> 发送 · <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-sans">Shift + Enter</kbd> 换行</span>
           </div>
         </div>
       </div>

@@ -1,4 +1,4 @@
-import { Download, Sun, Moon, Monitor, Settings, Sparkles } from "lucide-react";
+import { Download, Sun, Moon, Monitor, Settings, Sparkles, PanelLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -22,7 +22,7 @@ interface ChatHeaderProps {
   theme: Theme;
   onThemeChange: (t: Theme) => void;
   onOpenWorkshop?: () => void;
-  isDark: boolean;
+  onOpenMobileSidebar?: () => void;
 }
 
 const themeLabels: Record<Theme, { label: string; icon: typeof Sun }> = {
@@ -39,6 +39,7 @@ export function ChatHeader({
   theme,
   onThemeChange,
   onOpenWorkshop,
+  onOpenMobileSidebar,
 }: ChatHeaderProps) {
   const defaultModel = useSettingsStore((s) => s.defaultModel);
   const setDefaultModel = useSettingsStore((s) => s.setDefaultModel);
@@ -61,11 +62,23 @@ export function ChatHeader({
   };
 
   return (
-    <header className="h-12 border-b border-border flex items-center px-4 gap-2.5 bg-glass">
-      {/* Logo */}
-      <div className="flex items-center gap-2 mr-1">
+    <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border bg-glass px-3 sm:px-4">
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="md:hidden"
+        onClick={onOpenMobileSidebar}
+        aria-label="打开侧边栏"
+      >
+        <PanelLeft className="h-4 w-4" />
+      </Button>
+
+      <div className="flex min-w-0 items-center gap-2 sm:mr-1">
         <AppLogo size="md" />
-        <h1 className="text-sm font-semibold tracking-tight">Ripple</h1>
+        <div className="min-w-0">
+          <h1 className="truncate text-sm font-semibold tracking-tight">Ripple</h1>
+          <p className="hidden text-[11px] text-muted-foreground sm:block">你的本地 AI 工作台</p>
+        </div>
       </div>
 
       <div className="flex-1" />
@@ -129,7 +142,8 @@ export function ChatHeader({
       </DropdownMenu>
 
       {activeId && (
-        <ModelSelector
+        <div className="hidden min-w-0 sm:block">
+          <ModelSelector
           value={defaultModel}
           onChange={async (model) => {
             await setDefaultModel(model);
@@ -143,6 +157,7 @@ export function ChatHeader({
             }
           }}
         />
+        </div>
       )}
     </header>
   );

@@ -23,11 +23,19 @@
     margin: 0;
     padding: 0;
     min-height: 100vh;
+    min-height: 100dvh;
+    overflow: hidden;
   }
   #root {
     min-height: 100vh;
+    min-height: 100dvh;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+  }
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
   }
 }
 
@@ -115,6 +123,19 @@ a {
 button,
 a,
 [role="button"] {
-  transition: background-color 150ms ease-out, color 150ms ease-out,
-    border-color 150ms ease-out, transform 150ms ease-out, box-shadow 150ms ease-out;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }

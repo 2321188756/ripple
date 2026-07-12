@@ -1,97 +1,138 @@
 import { useCallback, useRef, useState } from "react";
-import { ZoomIn, ZoomOut, X } from "lucide-react";
+import { ZoomIn, ZoomOut } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 
 interface ImagePreviewProps {
   src: string;
   onClose: () => void;
 }
 
-/** 图片预览：App 层渲染，缩放 + 滚轮 + 拖动 */
+/** 图片预览：App 层 Dialog，支持键盘缩放、滚轮和 pointer 拖动。 */
 export function ImagePreview({ src, onClose }: ImagePreviewProps) {
   const [scale, setScale] = useState(1);
-  const [pos, setPos] = useState({ x: 0, y: 0 });
-  const drag = useRef({ on: false, sx: 0, sy: 0, px: 0, py: 0 });
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const drag = useRef({ active: false, moved: false, pointerId: 0, startX: 0, startY: 0, originX: 0, originY: 0 });
 
-  const zoomTo = useCallback((s: number) => setScale(Math.max(0.1, Math.min(5, s))), []);
-  const zoomIn = () => zoomTo(scale * 1.25);
-  const zoomOut = () => zoomTo(scale / 1.25);
-  const resetFit = () => { setScale(1); setPos({ x: 0, y: 0 }); };
+  const zoomTo = useCallback((nextScale: number) => setScale(Math.max(0.1, Math.min(5, nextScale))), []);
+  const resetView = () => {
+    setScale(1);
+    setPosition({ x: 0, y: 0 });
+  };
 
-  // 拖动
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0) return;
-    drag.current = { on: true, sx: e.clientX, sy: e.clientY, px: pos.x, py: pos.y };
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    drag.current = {
+      active: true,
+      moved: false,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: position.x,
+      originY: position.y,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
   };
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!drag.current.on) return;
-    setPos({ x: drag.current.px + e.clientX - drag.current.sx, y: drag.current.py + e.clientY - drag.current.sy });
-  };
-  const handleMouseUp = () => { drag.current.on = false; };
 
-  // 滚轮缩放
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    zoomTo(scale - e.deltaY * 0.002);
+  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!drag.current.active || event.pointerId !== drag.current.pointerId) return;
+    const deltaX = event.clientX - drag.current.startX;
+    const deltaY = event.clientY - drag.current.startY;
+    if (Math.abs(deltaX) > 4 || Math.abs(deltaY) > 4) drag.current.moved = true;
+    setPosition({
+      x: drag.current.originX + deltaX,
+      y: drag.current.originY + deltaY,
+    });
   };
+
+  const handlePointerEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerId !== drag.current.pointerId) return;
+    const shouldClose = !drag.current.moved && isAtRest;
+    drag.current.active = false;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (shouldClose) onClose();
+  };
+
+  const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    zoomTo(scale - event.deltaY * 0.002);
+  };
+
+  const isAtRest = scale === 1 && position.x === 0 && position.y === 0;
 
   return (
-    <div
-      className="fixed inset-0 z-[9999] bg-black overflow-hidden select-none"
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
-      onWheel={handleWheel}
-    >
-      {/* 工具栏 */}
-      <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-4 py-2 bg-zinc-900/80" style={{ height: 44 }}>
-        <div className="flex items-center gap-1.5">
-          <button className="w-7 h-7 flex items-center justify-center rounded text-white/70 hover:text-white hover:bg-white/10"
-            onClick={(e) => { e.stopPropagation(); zoomOut(); }} title="缩小">
-            <ZoomOut className="w-4 h-4" />
-          </button>
-          <span className="text-xs text-white/60 w-10 text-center">{Math.round(scale * 100)}%</span>
-          <button className="w-7 h-7 flex items-center justify-center rounded text-white/70 hover:text-white hover:bg-white/10"
-            onClick={(e) => { e.stopPropagation(); zoomIn(); }} title="放大">
-            <ZoomIn className="w-4 h-4" />
-          </button>
-          <button className="h-7 px-2 text-xs text-white/60 hover:text-white hover:bg-white/10 rounded"
-            onClick={(e) => { e.stopPropagation(); resetFit(); }}>
-            适应
-          </button>
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent
+        className="z-[100] h-[100dvh] max-h-none w-screen max-w-none translate-x-[-50%] translate-y-[-50%] overflow-hidden rounded-none border-0 bg-black p-0 shadow-none"
+        aria-describedby="image-preview-description"
+      >
+        <DialogTitle className="sr-only">图片预览</DialogTitle>
+        <DialogDescription id="image-preview-description" className="sr-only">
+          可使用缩放按钮、滚轮和拖动查看图片。按 Escape 关闭。
+        </DialogDescription>
+
+        <div className="absolute inset-x-0 top-0 z-10 flex h-14 items-center justify-between border-b border-white/10 bg-black/70 px-3 backdrop-blur-sm sm:px-5">
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="text-white/70 hover:bg-white/10 hover:text-white"
+              onClick={() => zoomTo(scale / 1.25)}
+              aria-label="缩小图片"
+            >
+              <ZoomOut className="h-4 w-4" />
+            </Button>
+            <output aria-live="polite" className="w-12 text-center text-xs tabular-nums text-white/70">
+              {Math.round(scale * 100)}%
+            </output>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="text-white/70 hover:bg-white/10 hover:text-white"
+              onClick={() => zoomTo(scale * 1.25)}
+              aria-label="放大图片"
+            >
+              <ZoomIn className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-xs text-white/70 hover:bg-white/10 hover:text-white"
+              onClick={resetView}
+            >
+              适应窗口
+            </Button>
+          </div>
         </div>
-        <button className="w-7 h-7 flex items-center justify-center rounded text-white/70 hover:text-white hover:bg-white/10"
-          onClick={onClose} title="关闭">
-          <X className="w-4 h-4" />
-        </button>
-      </div>
 
-      {/* 图片区域 */}
-      <div className="absolute inset-0 flex items-center justify-center" style={{ top: 44 }}
-        onClick={() => { if (scale === 1 && pos.x === 0 && pos.y === 0) onClose(); }}>
-        <img
-          src={src}
-          alt="preview"
-          draggable={false}
-          className="pointer-events-none"
-          style={{
-            maxWidth: scale === 1 && pos.x === 0 && pos.y === 0 ? "90%" : undefined,
-            maxHeight: scale === 1 && pos.x === 0 && pos.y === 0 ? "90%" : undefined,
-            objectFit: scale === 1 && pos.x === 0 && pos.y === 0 ? "contain" : undefined,
-            transform: scale !== 1 || pos.x !== 0 || pos.y !== 0
-              ? `translate(${pos.x}px,${pos.y}px) scale(${scale})`
-              : undefined,
-            transition: drag.current.on ? "none" : "transform 0.12s",
-            cursor: "grab",
-          }}
-        />
-      </div>
-
-      {/* 提示 */}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-[11px] text-white/30 pointer-events-none">
-        滚轮缩放 · 拖动移动 · 点击关闭
-      </div>
-    </div>
+        <div
+          className="absolute inset-x-0 bottom-0 top-14 flex touch-none items-center justify-center overflow-hidden select-none"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerEnd}
+          onPointerCancel={handlePointerEnd}
+          onWheel={handleWheel}
+          onDoubleClick={resetView}
+        >
+          <img
+            src={src}
+            alt="预览图片"
+            draggable={false}
+            className="pointer-events-none max-h-[88%] max-w-[92%] object-contain"
+            style={{
+              transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
+              transition: drag.current.active ? "none" : "transform var(--motion-fast) var(--ease-standard)",
+            }}
+          />
+          {isAtRest && (
+            <p className="pointer-events-none absolute bottom-5 text-xs text-white/45">
+              滚轮缩放 · 拖动移动 · 双击适应窗口
+            </p>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

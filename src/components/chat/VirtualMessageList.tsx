@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Check, X, Trash, RefreshCw, Pencil } from "lucide-react";
+import { Check, X, Trash, RefreshCw, Pencil, ArrowDown } from "lucide-react";
 import { MessageBubble } from "./MessageBubble";
 import { StreamingMessage } from "./StreamingMessage";
 import { EmptyChatPlaceholder } from "./EmptyChatPlaceholder";
@@ -115,12 +115,18 @@ export const VirtualMessageList = memo(function VirtualMessageList({
     }
   }, [items.length, streamingText, autoScroll, virtualizer]);
 
+  const jumpToLatest = useCallback(() => {
+    if (items.length === 0) return;
+    setAutoScroll(true);
+    virtualizer.scrollToIndex(items.length - 1, { align: "end" });
+  }, [items.length, virtualizer]);
+
   if (messages.length === 0 && streamingText === null) {
     return <EmptyChatPlaceholder />;
   }
 
   return (
-    <>
+    <div className="relative flex min-h-0 flex-1">
       <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto"
@@ -164,11 +170,11 @@ export const VirtualMessageList = memo(function VirtualMessageList({
                           }}
                         />
                         <div className="flex flex-col gap-1 self-end">
-                          <Button size="icon" className="h-7 w-7" onClick={handleSaveEdit} title="保存">
-                            <Check className="w-3.5 h-3.5" />
+                          <Button size="icon-xs" onClick={handleSaveEdit} aria-label="保存编辑">
+                            <Check className="h-3.5 w-3.5" />
                           </Button>
-                          <Button size="icon" variant="outline" className="h-7 w-7" onClick={cancelEdit} title="取消">
-                            <X className="w-3.5 h-3.5" />
+                          <Button size="icon-xs" variant="outline" onClick={cancelEdit} aria-label="取消编辑">
+                            <X className="h-3.5 w-3.5" />
                           </Button>
                         </div>
                       </div>
@@ -185,6 +191,19 @@ export const VirtualMessageList = memo(function VirtualMessageList({
         </div>
         <div ref={messagesEndRef} />
       </div>
+
+      {!autoScroll && items.length > 0 && (
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full border border-border bg-background/95 px-3 shadow-md backdrop-blur"
+          onClick={jumpToLatest}
+        >
+          <ArrowDown className="mr-1.5 h-3.5 w-3.5" />
+          回到最新消息
+        </Button>
+      )}
 
       {/* 右键菜单 */}
       <ContextMenu
@@ -210,6 +229,6 @@ export const VirtualMessageList = memo(function VirtualMessageList({
           },
         ]}
       />
-    </>
+    </div>
   );
 });

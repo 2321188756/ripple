@@ -75,6 +75,16 @@
     --text-2xl: 1.875rem;   /* 30px */
     --text-3xl: 2.25rem;    /* 36px */
 
+    /* === 布局与交互 === */
+    --shell-max-width: 90rem;
+    --sidebar-expanded-width: 16rem;
+    --sidebar-collapsed-width: 3.25rem;
+    --drawer-width: min(22rem, calc(100vw - 2rem));
+    --overlay-scrim: hsl(224 71% 4% / 0.45);
+    --motion-fast: 150ms;
+    --motion-standard: 200ms;
+    --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
     /* === 磨砂玻璃（Mica/Glass） === */
     --glass-blur: 20px;
     --glass-saturate: 180%;

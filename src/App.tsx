@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { ChatHeader } from "@/components/layout/ChatHeader";
 import { ChatInputArea } from "@/components/layout/ChatInputArea";
@@ -14,6 +15,7 @@ import { useChatStore } from "@/stores/chatStore";
 import { useAgentStore } from "@/stores/agentStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useKBStore } from "@/stores/kbStore";
+import { useUIStore } from "@/stores/uiStore";
 import { useIpcStatus } from "@/hooks/useIpcStatus";
 import { useStreamEvents } from "@/hooks/useStreamEvents";
 import { useTheme } from "@/hooks/useTheme";
@@ -40,13 +42,23 @@ function App() {
   const selectedAgent = useAgentStore((s) => s.selectedAgent);
   const loadAgents = useAgentStore((s) => s.loadAgents);
   const settingsLoad = useSettingsStore((s) => s.load);
+  const mobileSidebarOpen = useUIStore((s) => s.mobileSidebarOpen);
+  const setMobileSidebarOpen = useUIStore((s) => s.setMobileSidebarOpen);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const ipcOk = useIpcStatus();
   const [previewImg, setPreviewImg] = useState<string | null>(null);
   const [workshopOpen, setWorkshopOpen] = useState(false);
+  useEffect(() => {
+    const closeDesktopDrawer = () => {
+      if (window.matchMedia("(min-width: 768px)").matches) setMobileSidebarOpen(false);
+    };
+    window.addEventListener("resize", closeDesktopDrawer);
+    closeDesktopDrawer();
+    return () => window.removeEventListener("resize", closeDesktopDrawer);
+  }, [setMobileSidebarOpen]);
   useStreamEvents();
-  const { theme, setTheme, isDark } = useTheme();
+  const { theme, setTheme } = useTheme();
 
   // 初始化
   useEffect(() => {
@@ -151,10 +163,22 @@ function App() {
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex h-screen text-foreground">
+      <div className="flex h-[100dvh] min-w-0 overflow-hidden text-foreground">
         <Sidebar ipcOk={ipcOk} onOpenSettings={openSettingsWindow} />
+        <Sheet open={mobileSidebarOpen} onOpenChange={setMobileSidebarOpen}>
+          <SheetContent side="left" className="p-0">
+            <SheetTitle className="sr-only">侧边栏</SheetTitle>
+            <SheetDescription className="sr-only">Agent、会话和全局设置导航</SheetDescription>
+            <Sidebar
+              variant="mobile"
+              ipcOk={ipcOk}
+              onOpenSettings={openSettingsWindow}
+              onNavigate={() => setMobileSidebarOpen(false)}
+            />
+          </SheetContent>
+        </Sheet>
 
-        <main role="main" className="flex-1 flex flex-col min-w-0">
+        <main role="main" className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <ChatHeader
             activeId={activeId}
             hasMessages={hasMessages}
@@ -162,7 +186,7 @@ function App() {
             theme={theme}
             onThemeChange={setTheme}
             onOpenWorkshop={() => setWorkshopOpen(true)}
-            isDark={isDark}
+            onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
           />
 
           <VirtualMessageList

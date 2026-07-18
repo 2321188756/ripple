@@ -1,6 +1,6 @@
 use crate::state::{AppState, AuthenticatedScope};
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State},
     http::{
         header::{AUTHORIZATION, CONTENT_LENGTH},
         HeaderValue, StatusCode,
@@ -35,6 +35,10 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/me", get(me))
         .route("/users", post(create_user))
         .route("/sources/upload", post(create_upload_source))
+        .route(
+            "/sources/upload-multipart",
+            post(create_multipart_upload_source),
+        )
         .route("/retrieval/search", post(search_retrieval))
         .route("/jobs", get(list_jobs))
         .route("/jobs/{job_id}/cancel", post(cancel_job))
@@ -322,6 +326,113 @@ async fn cancel_job(
             .request_cancel_job(&scope.0, job_id)
             .await
             .map(|()| StatusCode::NO_CONTENT.into_response())
+            .unwrap_or_else(|error| error_response(error, request_id)),
+        Err(error) => error_response(error, request_id),
+    }
+}
+
+async fn create_multipart_upload_source(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<Uuid>,
+    Extension(scope): Extension<AuthenticatedScope>,
+    mut multipart: Multipart,
+) -> Response {
+    const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
+    let mut collection_id = None;
+    let mut display_name = None;
+    let mut mime_type = None;
+    let mut stored_object = None;
+
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(_) => return error_response(KnowledgeError::Validation, request_id),
+        };
+        let Some(name) = field.name().map(str::to_owned) else {
+            return error_response(KnowledgeError::Validation, request_id);
+        };
+        match name.as_str() {
+            "collection_id" if collection_id.is_none() => {
+                let value = match field.text().await {
+                    Ok(value) if value.len() <= 64 => value,
+                    _ => return error_response(KnowledgeError::Validation, request_id),
+                };
+                collection_id = Uuid::parse_str(value.trim()).ok();
+                if collection_id.is_none() {
+                    return error_response(KnowledgeError::Validation, request_id);
+                }
+            }
+            "display_name" if display_name.is_none() => {
+                let value = match field.text().await {
+                    Ok(value) if !value.trim().is_empty() && value.len() <= 512 => value,
+                    _ => return error_response(KnowledgeError::Validation, request_id),
+                };
+                display_name = Some(value);
+            }
+            "mime_type" if mime_type.is_none() => {
+                let value = match field.text().await {
+                    Ok(value) if value.len() <= 128 && supports_text_mime(&value) => value,
+                    _ => return error_response(KnowledgeError::Validation, request_id),
+                };
+                mime_type = Some(value);
+            }
+            "content" if stored_object.is_none() => {
+                if collection_id.is_none() || display_name.is_none() || mime_type.is_none() {
+                    return error_response(KnowledgeError::Validation, request_id);
+                }
+                let stream = futures::stream::try_unfold(field, |mut field| async move {
+                    match field.chunk().await {
+                        Ok(Some(chunk)) => Ok(Some((chunk, field))),
+                        Ok(None) => Ok(None),
+                        Err(error) => Err(std::io::Error::other(error.to_string())),
+                    }
+                });
+                stored_object = match state
+                    .object_store
+                    .put_stream(
+                        &scope.0.organization_id.to_string(),
+                        Box::pin(stream),
+                        MAX_FILE_BYTES,
+                    )
+                    .await
+                {
+                    Ok(object) if object.byte_size > 0 => Some(object),
+                    Ok(_) | Err(ripple_knowledge_ingest::ObjectStoreError::TooLarge) => {
+                        return error_response(KnowledgeError::Validation, request_id)
+                    }
+                    Err(_) => return error_response(KnowledgeError::Internal, request_id),
+                };
+            }
+            _ => return error_response(KnowledgeError::Validation, request_id),
+        }
+    }
+
+    let (Some(collection_id), Some(display_name), Some(mime_type), Some(object)) =
+        (collection_id, display_name, mime_type, stored_object)
+    else {
+        return error_response(KnowledgeError::Validation, request_id);
+    };
+    match required_store(&state) {
+        Ok(store) => store
+            .create_upload_source(
+                &scope.0,
+                collection_id,
+                &display_name,
+                &mime_type,
+                &object.key,
+                &object.sha256,
+                object.byte_size,
+                request_id,
+            )
+            .await
+            .map(|(source, job)| {
+                (
+                    StatusCode::ACCEPTED,
+                    Json(serde_json::json!({ "source": source, "job": job })),
+                )
+                    .into_response()
+            })
             .unwrap_or_else(|error| error_response(error, request_id)),
         Err(error) => error_response(error, request_id),
     }

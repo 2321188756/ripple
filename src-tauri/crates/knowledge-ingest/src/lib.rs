@@ -4,9 +4,13 @@
 //! only content-addressed object semantics and never returns host filesystem paths.
 
 use async_trait::async_trait;
+use bytes::Bytes;
+use futures::Stream;
 use sha2::{Digest, Sha256};
-use std::{io, path::PathBuf};
+use std::{io, path::PathBuf, pin::Pin};
 use tokio::{fs, io::AsyncWriteExt};
+
+pub type ObjectByteStream<'a> = Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send + 'a>>;
 
 #[derive(Debug, Clone)]
 pub struct StoredObject {
@@ -25,6 +29,12 @@ pub enum ObjectStoreError {
 
 #[async_trait]
 pub trait ObjectStore: Send + Sync {
+    async fn put_stream<'a>(
+        &self,
+        organization_scope: &str,
+        stream: ObjectByteStream<'a>,
+        max_bytes: u64,
+    ) -> Result<StoredObject, ObjectStoreError>;
     async fn put_bytes(
         &self,
         organization_scope: &str,
@@ -69,6 +79,68 @@ impl LocalObjectStore {
 
 #[async_trait]
 impl ObjectStore for LocalObjectStore {
+    async fn put_stream<'a>(
+        &self,
+        organization_scope: &str,
+        mut stream: ObjectByteStream<'a>,
+        max_bytes: u64,
+    ) -> Result<StoredObject, ObjectStoreError> {
+        if Self::safe_scope(organization_scope).is_none() {
+            return Err(ObjectStoreError::Storage);
+        }
+        let temporary_root = self.root.join(".tmp");
+        fs::create_dir_all(&temporary_root)
+            .await
+            .map_err(|_| ObjectStoreError::Storage)?;
+        let temporary = temporary_root.join(format!("upload-{}.tmp", uuid::Uuid::new_v4()));
+        let mut file = fs::File::create(&temporary)
+            .await
+            .map_err(|_| ObjectStoreError::Storage)?;
+        let mut hasher = Sha256::new();
+        let mut byte_size = 0u64;
+        while let Some(chunk) = futures::StreamExt::next(&mut stream).await {
+            let chunk = chunk.map_err(|_| ObjectStoreError::Storage)?;
+            byte_size = byte_size
+                .checked_add(chunk.len() as u64)
+                .ok_or(ObjectStoreError::TooLarge)?;
+            if byte_size > max_bytes {
+                let _ = fs::remove_file(&temporary).await;
+                return Err(ObjectStoreError::TooLarge);
+            }
+            hasher.update(&chunk);
+            file.write_all(&chunk)
+                .await
+                .map_err(|_| ObjectStoreError::Storage)?;
+        }
+        file.sync_all()
+            .await
+            .map_err(|_| ObjectStoreError::Storage)?;
+        drop(file);
+        let digest: [u8; 32] = hasher.finalize().into();
+        let hash = hex::encode(digest);
+        let key = format!("{organization_scope}/sha256/{}/{hash}", &hash[..2]);
+        let path = self.path_for(&key).ok_or(ObjectStoreError::Storage)?;
+        let parent = path.parent().ok_or(ObjectStoreError::Storage)?;
+        fs::create_dir_all(parent)
+            .await
+            .map_err(|_| ObjectStoreError::Storage)?;
+        match fs::rename(&temporary, &path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                let _ = fs::remove_file(&temporary).await;
+            }
+            Err(_) => {
+                let _ = fs::remove_file(&temporary).await;
+                return Err(ObjectStoreError::Storage);
+            }
+        }
+        Ok(StoredObject {
+            key,
+            sha256: digest,
+            byte_size,
+        })
+    }
+
     async fn put_bytes(
         &self,
         organization_scope: &str,
@@ -268,6 +340,34 @@ pub fn chunk_text(text: &str, target_tokens: usize, max_tokens: usize) -> Vec<Te
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn streams_content_with_hashing_and_limit() {
+        let root =
+            std::env::temp_dir().join(format!("ripple-object-test-{}", uuid::Uuid::new_v4()));
+        let store = LocalObjectStore::new(&root);
+        let scope = uuid::Uuid::new_v4().to_string();
+        let stream = futures::stream::iter(vec![
+            Ok(Bytes::from_static(b"hello ")),
+            Ok(Bytes::from_static(b"world")),
+        ]);
+        let stored = store
+            .put_stream(&scope, Box::pin(stream), 11)
+            .await
+            .unwrap();
+        assert_eq!(stored.byte_size, 11);
+        assert_eq!(
+            store.read_bytes(&stored.key, 11).await.unwrap(),
+            b"hello world"
+        );
+
+        let oversized = futures::stream::iter(vec![Ok(Bytes::from_static(b"too large"))]);
+        assert!(matches!(
+            store.put_stream(&scope, Box::pin(oversized), 3).await,
+            Err(ObjectStoreError::TooLarge)
+        ));
+        let _ = fs::remove_dir_all(root).await;
+    }
 
     #[test]
     fn extracts_and_normalizes_supported_text() {

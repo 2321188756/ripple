@@ -66,7 +66,6 @@ impl KnowledgeStore {
 
     pub async fn initialize(&self) -> Result<(), KnowledgeError> {
         self.verify_postgres().await?;
-        self.verify_pgvector().await?;
         MIGRATOR
             .run(&self.pool)
             .await
@@ -75,7 +74,6 @@ impl KnowledgeStore {
 
     pub async fn readiness(&self) -> Result<Vec<DependencyHealth>, KnowledgeError> {
         self.verify_postgres().await?;
-        self.verify_pgvector().await?;
         self.verify_migration_ledger().await?;
         Ok(vec![
             DependencyHealth {
@@ -84,7 +82,7 @@ impl KnowledgeStore {
             },
             DependencyHealth {
                 name: "pgvector".into(),
-                state: DependencyState::Ready,
+                state: DependencyState::NotConfigured,
             },
             DependencyHealth {
                 name: "migration_audit".into(),

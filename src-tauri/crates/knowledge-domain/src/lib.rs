@@ -16,6 +16,63 @@ pub type OrganizationId = Uuid;
 pub type UserId = Uuid;
 pub type CollectionId = Uuid;
 pub type SessionId = Uuid;
+pub type EmbeddingProfileId = Uuid;
+pub type EmbeddingProfileVersionId = Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddingProviderKind {
+    OpenAiCompatible,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingProfileResponse {
+    pub id: EmbeddingProfileId,
+    pub name: String,
+    pub provider_kind: EmbeddingProviderKind,
+    pub active_version_id: Option<EmbeddingProfileVersionId>,
+    pub enabled: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingProfileVersionResponse {
+    pub id: EmbeddingProfileVersionId,
+    pub profile_id: EmbeddingProfileId,
+    pub version: i32,
+    pub base_url: String,
+    pub model: String,
+    pub expected_dimension: i32,
+    pub batch_size: i32,
+    pub request_timeout_ms: i32,
+    pub max_retries: i32,
+    pub has_secret: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateEmbeddingProfileRequest {
+    pub name: String,
+    pub base_url: String,
+    pub model: String,
+    pub expected_dimension: i32,
+    pub batch_size: i32,
+    pub request_timeout_ms: i32,
+    pub max_retries: i32,
+    pub secret_ref: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateEmbeddingProfileVersionRequest {
+    pub base_url: String,
+    pub model: String,
+    pub expected_dimension: i32,
+    pub batch_size: i32,
+    pub request_timeout_ms: i32,
+    pub max_retries: i32,
+    pub secret_ref: String,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -343,6 +400,10 @@ pub enum KnowledgeError {
     Conflict,
     #[error("internal knowledge service failure")]
     Internal,
+    #[error("embedding provider failure")]
+    EmbeddingProvider,
+    #[error("embedding response is invalid")]
+    EmbeddingInvalid,
 }
 
 impl KnowledgeError {
@@ -358,6 +419,8 @@ impl KnowledgeError {
             Self::NotFound => "not_found",
             Self::Conflict => "conflict",
             Self::Internal => "internal_error",
+            Self::EmbeddingProvider => "embedding_provider_failed",
+            Self::EmbeddingInvalid => "embedding_response_invalid",
         }
     }
 
@@ -375,6 +438,8 @@ impl KnowledgeError {
             Self::NotFound => "The requested resource was not found.",
             Self::Conflict => "The request conflicts with the current service state.",
             Self::Internal => "The knowledge service could not complete the request.",
+            Self::EmbeddingProvider => "The embedding provider could not complete the request.",
+            Self::EmbeddingInvalid => "The embedding provider returned an invalid response.",
         }
     }
 
@@ -389,7 +454,9 @@ impl KnowledgeError {
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::Conflict => StatusCode::CONFLICT,
-            Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Internal | Self::EmbeddingProvider | Self::EmbeddingInvalid => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         }
     }
 

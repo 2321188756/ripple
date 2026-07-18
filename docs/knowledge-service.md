@@ -50,7 +50,14 @@ The PowerShell helper sets:
 
 It is loopback-only by default. A LAN listener must be explicitly supplied through `RIPPLE_KNOWLEDGE_LISTEN_ADDR`; production TLS, Windows Service installation, firewall policy, accounts, and collection ACLs are added before any LAN deployment is supported.
 
-## Isolated auth/ACL integration verification
+## Embedding provider contract
+
+Embedding profiles are server-side configuration and are versioned immutably. A profile version fixes the provider kind, endpoint, model, expected dimension, batch size, timeout, retry limit, and secret reference used by an ingestion revision. Version rows cannot be overwritten or deleted; changing a provider setting creates a new version and activation changes only the default for future jobs.
+
+The OpenAI-compatible adapter sends `POST {base_url}/embeddings` and validates response count, explicit item indexes, vector dimension, and finite floating-point values. Results are reordered by `index`, not by provider response order. Transport failures, timeouts, rate limits, and selected 5xx responses have bounded retries; authentication, schema, count, dimension, and non-finite-value failures are terminal. Provider keys and upstream response bodies are never returned or logged.
+
+The current embedding persistence boundary stores profile/version-keyed binary vectors for later migration to pgvector. HNSW, dense retrieval, and hybrid fusion are not enabled by this slice. A source revision must have a complete validated embedding set before it can become active; an embedding failure leaves the previous active revision unchanged.
+
 
 On a Docker-capable development host, run:
 

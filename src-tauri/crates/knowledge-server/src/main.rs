@@ -1,4 +1,5 @@
 mod config;
+mod embedding;
 mod routes;
 mod state;
 mod worker;

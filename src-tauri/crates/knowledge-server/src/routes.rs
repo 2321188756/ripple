@@ -18,7 +18,7 @@ use ripple_knowledge_domain::{
     KnowledgeError, LiveHealthResponse, LoginRequest, ReadyHealthResponse, RefreshRequest,
     SessionResponse, UpsertCollectionMemberRequest, REQUEST_ID_HEADER,
 };
-use ripple_knowledge_ingest::ObjectStore;
+use ripple_knowledge_ingest::{supports_text_mime, ObjectStore};
 use ripple_knowledge_store::IssuedSession;
 use std::iter::once;
 use tower_http::{
@@ -337,7 +337,10 @@ async fn create_upload_source(
         Ok(content) => content,
         Err(_) => return error_response(KnowledgeError::Validation, request_id),
     };
-    if content.is_empty() || content.len() > 10 * 1024 * 1024 {
+    if content.is_empty()
+        || content.len() > 10 * 1024 * 1024
+        || !supports_text_mime(&input.mime_type)
+    {
         return error_response(KnowledgeError::Validation, request_id);
     }
     let object = match state

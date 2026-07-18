@@ -136,6 +136,78 @@ impl ObjectStore for LocalObjectStore {
 }
 
 #[derive(Debug, Clone)]
+pub struct ExtractedText {
+    pub title: String,
+    pub normalized_text: String,
+    pub extractor_id: &'static str,
+    pub extractor_version: &'static str,
+    pub warnings: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ExtractionError {
+    #[error("unsupported document type")]
+    UnsupportedType,
+    #[error("document encoding is invalid")]
+    InvalidEncoding,
+    #[error("document contains no searchable text")]
+    Empty,
+    #[error("document text is too large")]
+    TooLarge,
+}
+
+pub fn supports_text_mime(mime_type: &str) -> bool {
+    let mime_type = mime_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    mime_type.starts_with("text/")
+        || matches!(
+            mime_type.as_str(),
+            "application/json"
+                | "application/xml"
+                | "application/javascript"
+                | "application/x-javascript"
+                | "application/toml"
+                | "application/yaml"
+                | "application/x-yaml"
+        )
+}
+
+pub fn extract_text(
+    bytes: &[u8],
+    mime_type: &str,
+    display_name: &str,
+    max_text_bytes: usize,
+) -> Result<ExtractedText, ExtractionError> {
+    if !supports_text_mime(mime_type) {
+        return Err(ExtractionError::UnsupportedType);
+    }
+    if bytes.len() > max_text_bytes {
+        return Err(ExtractionError::TooLarge);
+    }
+    let decoded = std::str::from_utf8(bytes).map_err(|_| ExtractionError::InvalidEncoding)?;
+    if decoded.contains('\0') {
+        return Err(ExtractionError::InvalidEncoding);
+    }
+    let normalized_text = decoded.replace("\r\n", "\n").replace('\r', "\n");
+    let normalized_text = normalized_text.trim().to_owned();
+    if normalized_text.is_empty() {
+        return Err(ExtractionError::Empty);
+    }
+    let title = display_name.trim();
+    Ok(ExtractedText {
+        title: if title.is_empty() { "Untitled" } else { title }.to_owned(),
+        normalized_text,
+        extractor_id: "ripple.plain-text",
+        extractor_version: "1",
+        warnings: Vec::new(),
+    })
+}
+
+#[derive(Debug, Clone)]
 pub struct TextChunk {
     pub ordinal: i32,
     pub content: String,
@@ -191,4 +263,51 @@ pub fn chunk_text(text: &str, target_tokens: usize, max_tokens: usize) -> Vec<Te
         start = end;
     }
     chunks
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_and_normalizes_supported_text() {
+        let extracted = extract_text(
+            b"# Title\r\n\r\nBody\rLine",
+            "text/markdown; charset=utf-8",
+            "guide.md",
+            1024,
+        )
+        .unwrap();
+        assert_eq!(extracted.title, "guide.md");
+        assert_eq!(extracted.normalized_text, "# Title\n\nBody\nLine");
+        assert_eq!(extracted.extractor_id, "ripple.plain-text");
+    }
+
+    #[test]
+    fn rejects_binary_and_invalid_utf8() {
+        assert_eq!(
+            extract_text(b"binary", "application/pdf", "file.pdf", 1024).unwrap_err(),
+            ExtractionError::UnsupportedType
+        );
+        assert_eq!(
+            extract_text(&[0xff, 0xfe], "text/plain", "bad.txt", 1024).unwrap_err(),
+            ExtractionError::InvalidEncoding
+        );
+        assert_eq!(
+            extract_text(b"a\0b", "text/plain", "bad.txt", 1024).unwrap_err(),
+            ExtractionError::InvalidEncoding
+        );
+    }
+
+    #[test]
+    fn enforces_text_limit_and_non_empty_content() {
+        assert_eq!(
+            extract_text(b"too long", "text/plain", "large.txt", 3).unwrap_err(),
+            ExtractionError::TooLarge
+        );
+        assert_eq!(
+            extract_text(b" \r\n ", "text/plain", "empty.txt", 1024).unwrap_err(),
+            ExtractionError::Empty
+        );
+    }
 }

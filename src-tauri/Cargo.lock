@@ -3715,6 +3715,7 @@ dependencies = [
  "rand 0.8.6",
  "ripple-knowledge-domain",
  "ripple-knowledge-ingest",
+ "serde_json",
  "sha2",
  "sqlx",
  "subtle",

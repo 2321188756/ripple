@@ -49,6 +49,8 @@ pub struct LeasedIngestionJob {
     pub collection_id: CollectionId,
     pub original_object_key: String,
     pub mime_type: String,
+    pub display_name: String,
+    pub correlation_id: Uuid,
 }
 
 impl KnowledgeStore {
@@ -500,7 +502,7 @@ impl KnowledgeStore {
             .begin()
             .await
             .map_err(|_| KnowledgeError::DatabaseUnavailable)?;
-        let row = sqlx::query("SELECT j.id, j.source_id, j.revision_id, j.collection_id, r.original_object_key, r.mime_type FROM ingestion_jobs j JOIN source_revisions r ON r.id = j.revision_id WHERE j.kind = 'ingest_revision' AND j.state IN ('queued','retry_scheduled') AND j.next_run_at <= CURRENT_TIMESTAMP AND j.cancel_requested_at IS NULL ORDER BY j.created_at FOR UPDATE SKIP LOCKED LIMIT 1")
+        let row = sqlx::query("SELECT j.id, j.source_id, j.revision_id, j.collection_id, j.correlation_id, s.display_name, r.original_object_key, r.mime_type FROM ingestion_jobs j JOIN source_revisions r ON r.id = j.revision_id JOIN sources s ON s.id = j.source_id WHERE j.kind = 'ingest_revision' AND j.state IN ('queued','retry_scheduled') AND j.next_run_at <= CURRENT_TIMESTAMP AND j.cancel_requested_at IS NULL ORDER BY j.created_at FOR UPDATE SKIP LOCKED LIMIT 1")
             .fetch_optional(&mut *tx).await.map_err(|_| KnowledgeError::Internal)?;
         let Some(row) = row else {
             tx.commit().await.map_err(|_| KnowledgeError::Internal)?;
@@ -537,7 +539,78 @@ impl KnowledgeStore {
             mime_type: row
                 .try_get("mime_type")
                 .map_err(|_| KnowledgeError::Internal)?,
+            display_name: row
+                .try_get("display_name")
+                .map_err(|_| KnowledgeError::Internal)?,
+            correlation_id: row
+                .try_get("correlation_id")
+                .map_err(|_| KnowledgeError::Internal)?,
         }))
+    }
+
+    pub async fn renew_ingestion_lease(
+        &self,
+        job_id: Uuid,
+        worker_id: &str,
+    ) -> Result<(), KnowledgeError> {
+        let result = sqlx::query("UPDATE ingestion_jobs SET lease_expires_at = CURRENT_TIMESTAMP + INTERVAL '60 seconds', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND state IN ('leased','running') AND lease_owner = $2 AND lease_expires_at > CURRENT_TIMESTAMP AND cancel_requested_at IS NULL")
+            .bind(job_id)
+            .bind(worker_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|_| KnowledgeError::DatabaseUnavailable)?;
+        if result.rows_affected() != 1 {
+            return Err(KnowledgeError::Conflict);
+        }
+        Ok(())
+    }
+
+    pub async fn ingestion_job_cancel_requested(
+        &self,
+        job_id: Uuid,
+        worker_id: &str,
+    ) -> Result<bool, KnowledgeError> {
+        sqlx::query_scalar("SELECT cancel_requested_at IS NOT NULL FROM ingestion_jobs WHERE id = $1 AND state IN ('leased','running') AND lease_owner = $2")
+            .bind(job_id)
+            .bind(worker_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|_| KnowledgeError::DatabaseUnavailable)?
+            .ok_or(KnowledgeError::Conflict)
+    }
+
+    pub async fn cancel_leased_ingestion_job(
+        &self,
+        job: &LeasedIngestionJob,
+        worker_id: &str,
+    ) -> Result<(), KnowledgeError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KnowledgeError::DatabaseUnavailable)?;
+        let result = sqlx::query("UPDATE ingestion_jobs SET state = 'cancelled', lease_owner = NULL, lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND state IN ('leased','running') AND lease_owner = $2 AND cancel_requested_at IS NOT NULL")
+            .bind(job.id)
+            .bind(worker_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| KnowledgeError::Internal)?;
+        if result.rows_affected() != 1 {
+            return Err(KnowledgeError::Conflict);
+        }
+        sqlx::query("UPDATE source_revisions SET state = 'cancelled', completed_at = CURRENT_TIMESTAMP WHERE id = $1 AND state = 'processing'")
+            .bind(job.revision_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| KnowledgeError::Internal)?;
+        sqlx::query("INSERT INTO ingestion_job_events (id, job_id, state, correlation_id) VALUES ($1,$2,'cancelled',$3)")
+            .bind(Uuid::new_v4())
+            .bind(job.id)
+            .bind(job.correlation_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| KnowledgeError::Internal)?;
+        tx.commit().await.map_err(|_| KnowledgeError::Internal)
     }
 
     pub async fn fail_ingestion_job(
@@ -583,9 +656,66 @@ impl KnowledgeStore {
     }
 
     pub async fn recover_expired_ingestion_leases(&self) -> Result<u64, KnowledgeError> {
-        let result = sqlx::query("UPDATE ingestion_jobs SET state = CASE WHEN attempt < max_attempts THEN 'retry_scheduled' ELSE 'failed' END, error_code = 'lease_expired', lease_owner = NULL, lease_expires_at = NULL, next_run_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE state IN ('leased','running') AND lease_expires_at < CURRENT_TIMESTAMP")
-            .execute(&self.pool).await.map_err(|_| KnowledgeError::DatabaseUnavailable)?;
-        Ok(result.rows_affected())
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KnowledgeError::DatabaseUnavailable)?;
+        let rows = sqlx::query("SELECT id, revision_id, attempt, max_attempts, correlation_id, cancel_requested_at IS NOT NULL AS cancelled FROM ingestion_jobs WHERE state IN ('leased','running') AND lease_expires_at < CURRENT_TIMESTAMP FOR UPDATE")
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|_| KnowledgeError::Internal)?;
+        for row in &rows {
+            let job_id: Uuid = row.try_get("id").map_err(|_| KnowledgeError::Internal)?;
+            let revision_id: Option<Uuid> = row
+                .try_get("revision_id")
+                .map_err(|_| KnowledgeError::Internal)?;
+            let attempt: i32 = row
+                .try_get("attempt")
+                .map_err(|_| KnowledgeError::Internal)?;
+            let max_attempts: i32 = row
+                .try_get("max_attempts")
+                .map_err(|_| KnowledgeError::Internal)?;
+            let cancelled: bool = row
+                .try_get("cancelled")
+                .map_err(|_| KnowledgeError::Internal)?;
+            let correlation_id: Uuid = row
+                .try_get("correlation_id")
+                .map_err(|_| KnowledgeError::Internal)?;
+            let next_state = if cancelled {
+                "cancelled"
+            } else if attempt < max_attempts {
+                "retry_scheduled"
+            } else {
+                "failed"
+            };
+            sqlx::query("UPDATE ingestion_jobs SET state = $1, error_code = $2, lease_owner = NULL, lease_expires_at = NULL, next_run_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $3")
+                .bind(next_state)
+                .bind((next_state != "cancelled").then_some("lease_expired"))
+                .bind(job_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| KnowledgeError::Internal)?;
+            if matches!(next_state, "failed" | "cancelled") {
+                sqlx::query("UPDATE source_revisions SET state = $1, completed_at = CURRENT_TIMESTAMP WHERE id = $2 AND state = 'processing'")
+                    .bind(next_state)
+                    .bind(revision_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|_| KnowledgeError::Internal)?;
+            }
+            sqlx::query("INSERT INTO ingestion_job_events (id, job_id, state, error_code, correlation_id) VALUES ($1,$2,$3,$4,$5)")
+                .bind(Uuid::new_v4())
+                .bind(job_id)
+                .bind(next_state)
+                .bind((next_state != "cancelled").then_some("lease_expired"))
+                .bind(correlation_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| KnowledgeError::Internal)?;
+        }
+        tx.commit().await.map_err(|_| KnowledgeError::Internal)?;
+        Ok(rows.len() as u64)
     }
 
     pub async fn complete_ingestion_job(
@@ -594,6 +724,9 @@ impl KnowledgeStore {
         worker_id: &str,
         title: &str,
         normalized_text: &str,
+        extractor_id: &str,
+        extractor_version: &str,
+        warnings: &[&str],
         chunks: &[ripple_knowledge_ingest::TextChunk],
     ) -> Result<(), KnowledgeError> {
         let mut tx = self
@@ -608,7 +741,21 @@ impl KnowledgeStore {
         }
         let document_id = Uuid::new_v4();
         sqlx::query("INSERT INTO documents (id, source_revision_id, title, normalized_text) VALUES ($1,$2,$3,$4)")
-            .bind(document_id).bind(job.revision_id).bind(title).bind(normalized_text).execute(&mut *tx).await.map_err(|_| KnowledgeError::Internal)?;
+            .bind(document_id)
+            .bind(job.revision_id)
+            .bind(title)
+            .bind(normalized_text)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| KnowledgeError::Internal)?;
+        sqlx::query("UPDATE source_revisions SET extractor_id = $1, extractor_version = $2, warnings = $3 WHERE id = $4")
+            .bind(extractor_id)
+            .bind(extractor_version)
+            .bind(serde_json::to_value(warnings).map_err(|_| KnowledgeError::Internal)?)
+            .bind(job.revision_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| KnowledgeError::Internal)?;
         let chunk_ids: Vec<Uuid> = chunks.iter().map(|_| Uuid::new_v4()).collect();
         for (index, chunk) in chunks.iter().enumerate() {
             let predecessor = index.checked_sub(1).map(|previous| chunk_ids[previous]);
@@ -618,7 +765,18 @@ impl KnowledgeStore {
         }
         sqlx::query("UPDATE source_revisions SET state = 'ready', completed_at = CURRENT_TIMESTAMP WHERE id = $1").bind(job.revision_id).execute(&mut *tx).await.map_err(|_| KnowledgeError::Internal)?;
         sqlx::query("UPDATE sources SET active_revision_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2").bind(job.revision_id).bind(job.source_id).execute(&mut *tx).await.map_err(|_| KnowledgeError::Internal)?;
-        sqlx::query("UPDATE ingestion_jobs SET state = 'succeeded', progress_current = progress_total, lease_owner = NULL, lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1").bind(job.id).execute(&mut *tx).await.map_err(|_| KnowledgeError::Internal)?;
+        sqlx::query("UPDATE ingestion_jobs SET state = 'succeeded', progress_current = COALESCE(progress_total, progress_current), lease_owner = NULL, lease_expires_at = NULL, error_code = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND state = 'leased' AND lease_owner = $2 AND lease_expires_at > CURRENT_TIMESTAMP AND cancel_requested_at IS NULL")
+            .bind(job.id)
+            .bind(worker_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| KnowledgeError::Internal)?;
+        sqlx::query("INSERT INTO ingestion_job_events (id, job_id, state, progress_current, progress_total, correlation_id) SELECT $1, id, 'succeeded', progress_total, progress_total, correlation_id FROM ingestion_jobs WHERE id = $2")
+            .bind(Uuid::new_v4())
+            .bind(job.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| KnowledgeError::Internal)?;
         tx.commit().await.map_err(|_| KnowledgeError::Internal)
     }
 
@@ -662,12 +820,48 @@ impl KnowledgeStore {
         scope: &AccessScope,
         job_id: Uuid,
     ) -> Result<(), KnowledgeError> {
-        let result = sqlx::query("UPDATE ingestion_jobs j SET cancel_requested_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP FROM collection_memberships m WHERE j.id = $1 AND m.collection_id = j.collection_id AND m.user_id = $2 AND j.state IN ('queued','leased','running','retry_scheduled')")
-            .bind(job_id).bind(scope.user_id).execute(&self.pool).await.map_err(|_| KnowledgeError::DatabaseUnavailable)?;
-        if result.rows_affected() == 0 {
-            return Err(KnowledgeError::NotFound);
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| KnowledgeError::DatabaseUnavailable)?;
+        let row = sqlx::query("SELECT j.revision_id, j.state, j.correlation_id FROM ingestion_jobs j JOIN collection_memberships m ON m.collection_id = j.collection_id AND m.user_id = $2 WHERE j.id = $1 AND j.state IN ('queued','leased','running','retry_scheduled') AND (m.role IN ('collection_admin','editor') OR $3) FOR UPDATE")
+            .bind(job_id)
+            .bind(scope.user_id)
+            .bind(scope.is_server_admin())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|_| KnowledgeError::Internal)?
+            .ok_or(KnowledgeError::NotFound)?;
+        let revision_id: Option<Uuid> = row
+            .try_get("revision_id")
+            .map_err(|_| KnowledgeError::Internal)?;
+        let state: String = row.try_get("state").map_err(|_| KnowledgeError::Internal)?;
+        let correlation_id: Uuid = row
+            .try_get("correlation_id")
+            .map_err(|_| KnowledgeError::Internal)?;
+        let immediate = matches!(state.as_str(), "queued" | "retry_scheduled");
+        sqlx::query("UPDATE ingestion_jobs SET cancel_requested_at = CURRENT_TIMESTAMP, state = CASE WHEN $1 THEN 'cancelled' ELSE state END, updated_at = CURRENT_TIMESTAMP WHERE id = $2")
+            .bind(immediate)
+            .bind(job_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| KnowledgeError::Internal)?;
+        if immediate {
+            sqlx::query("UPDATE source_revisions SET state = 'cancelled', completed_at = CURRENT_TIMESTAMP WHERE id = $1 AND state IN ('pending','processing')")
+                .bind(revision_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| KnowledgeError::Internal)?;
+            sqlx::query("INSERT INTO ingestion_job_events (id, job_id, state, correlation_id) VALUES ($1,$2,'cancelled',$3)")
+                .bind(Uuid::new_v4())
+                .bind(job_id)
+                .bind(correlation_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| KnowledgeError::Internal)?;
         }
-        Ok(())
+        tx.commit().await.map_err(|_| KnowledgeError::Internal)
     }
 
     pub async fn create_upload_source(

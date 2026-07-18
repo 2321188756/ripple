@@ -7,6 +7,6 @@ pub mod store;
 pub mod types;
 
 pub use chunking::{chunk_text, ChunkConfig};
-pub use embedding::{cosine_similarity, EmbeddingClient};
+pub use embedding::{cosine_similarity, embed_chunks, EmbeddingClient, EmbeddingProvider};
 pub use file_read::read_file_content;
 pub use types::{Chunk, Document, KnowledgeBase, SearchResult};

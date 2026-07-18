@@ -3,7 +3,6 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import rehypeRaw from "rehype-raw";
 import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { registerLanguages } from "./languages";
@@ -23,7 +22,7 @@ function MermaidBlock({ code }: { code: string }) {
       try {
         const m = (await import("mermaid")).default;
         if (!mermaidInitialized) {
-          m.initialize({ startOnLoad: false, theme: document.documentElement.classList.contains("dark") ? "dark" : "default", securityLevel: "loose" });
+          m.initialize({ startOnLoad: false, theme: document.documentElement.classList.contains("dark") ? "dark" : "default", securityLevel: "strict" });
           mermaidInitialized = true;
         }
         const id = `mermaid-${Math.random().toString(36).slice(2, 8)}`;
@@ -177,7 +176,7 @@ function MarkdownRendererImpl({ content }: { content: string }) {
   // 普通 Markdown / 简单 HTML
   return <div className="relative group/block my-2">
     <div className="prose prose-sm dark:prose-invert max-w-none [&_p]:my-0.5 [&_ul]:my-0.5 [&_ol]:my-0.5 [&_li]:my-0 [&_pre]:my-1 [&_h1]:my-1 [&_h2]:my-1 [&_h3]:my-1 [&_h4]:my-1 [&_blockquote]:my-1 [&_table]:my-1">
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeRaw, rehypeKatex]} components={components}>{rawHtml}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={components}>{rawHtml}</ReactMarkdown>
     </div>
     {(rawHtml.startsWith("<") || rawHtml.includes("<div") || rawHtml.includes("<style")) && (
       <div className="absolute top-2 right-2 flex gap-1.5 opacity-0 group-hover/block:opacity-100 transition-opacity">

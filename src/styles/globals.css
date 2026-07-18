@@ -107,16 +107,59 @@ a {
   color: hsl(var(--foreground));
 }
 
-/* === 磨砂玻璃（Mica/Glass，参考 VCP --glass-blur 变量） === */
-.bg-glass {
+/* === 磨砂玻璃与壁纸阅读层 === */
+.bg-glass,
+.bg-glass-sidebar,
+.bg-content-wash {
   background-color: var(--glass-bg);
+}
+
+.bg-glass,
+.bg-glass-sidebar {
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
+
 .bg-glass-sidebar {
   background-color: var(--glass-sidebar-bg);
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+
+.bg-content-wash {
+  background-color: var(--content-wash-bg);
+}
+
+body.has-wallpaper .bg-glass {
+  background-color: var(--wallpaper-glass-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--wallpaper-glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--wallpaper-glass-saturate));
+  border-color: var(--wallpaper-divider);
+  box-shadow: var(--wallpaper-surface-shadow);
+}
+
+body.has-wallpaper .bg-glass-sidebar {
+  background-color: var(--wallpaper-glass-sidebar-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--wallpaper-glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--wallpaper-glass-saturate));
+  border-color: var(--wallpaper-divider);
+  box-shadow: var(--wallpaper-surface-shadow);
+}
+
+body.has-wallpaper .bg-content-wash {
+  background-color: var(--wallpaper-content-wash-bg);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .bg-glass {
+    background-color: hsl(var(--background) / 0.98);
+  }
+
+  .bg-glass-sidebar {
+    background-color: hsl(var(--sidebar-background) / 0.99);
+  }
+
+  .bg-content-wash {
+    background-color: hsl(var(--background) / 0.94);
+  }
 }
 
 /* 全局过渡：交互元素统一 ease-out，避免生硬 */

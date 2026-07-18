@@ -1,0 +1,16 @@
+{
+  "identifier": "default",
+  "description": "默认权限（E2E）",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-close",
+    "core:window:allow-set-focus",
+    "shell:allow-open",
+    "dialog:default",
+    "dialog:allow-open",
+    "fs:read-all",
+    "wdio:default"
+  ]
+}

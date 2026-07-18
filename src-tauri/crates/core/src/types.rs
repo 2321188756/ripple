@@ -51,8 +51,13 @@ pub enum MessageRole {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
-    Text { text: String },
-    Image { url: String, detail: Option<String> },
+    Text {
+        text: String,
+    },
+    Image {
+        url: String,
+        detail: Option<String>,
+    },
     ToolCall {
         id: String,
         name: String,
@@ -62,7 +67,9 @@ pub enum ContentBlock {
         tool_call_id: String,
         content: String,
     },
-    Thinking { text: String },
+    Thinking {
+        text: String,
+    },
 }
 
 impl ContentBlock {
@@ -89,7 +96,11 @@ pub struct Message {
 
 impl Message {
     pub fn new_user(conversation_id: &str, text: &str) -> Self {
-        Self::new(conversation_id, MessageRole::User, vec![ContentBlock::Text { text: text.into() }])
+        Self::new(
+            conversation_id,
+            MessageRole::User,
+            vec![ContentBlock::Text { text: text.into() }],
+        )
     }
 
     pub fn new_assistant(conversation_id: &str) -> Self {

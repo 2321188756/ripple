@@ -9,8 +9,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use tracing::warn;
 
-use crate::state::AppState;
 use crate::commands::conversation;
+use crate::state::AppState;
 
 /// 带超时的数据库连接获取
 macro_rules! db_conn {
@@ -26,12 +26,12 @@ macro_rules! db_conn {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn send_message(
     app: AppHandle,
     state: State<'_, AppState>,
     conversation_id: String,
     content: String,
-    api_key: String,
     api_base_url: Option<String>,
     model: Option<String>,
     agent_mode: Option<bool>,
@@ -42,44 +42,77 @@ pub async fn send_message(
     user_message_id: String,
 ) -> Result<String, String> {
     tracing::info!(%conversation_id, len = content.len(), "send_message start");
+    let api_key = crate::commands::settings::load_api_key(&state)?;
 
     // 1. 获取对话
     let conn = db_conn!(state);
     let conversation = match conversation::get_conversation_inner(&conn, &conversation_id) {
         Ok(c) => c,
-        Err(e) => { tracing::error!(%e, "conversation not found"); return Err(format!("conversation not found: {e}")); }
+        Err(e) => {
+            tracing::error!(%e, "conversation not found");
+            return Err(format!("conversation not found: {e}"));
+        }
     };
     drop(conn);
     tracing::info!(model = %conversation.model_id, provider = %conversation.provider_id, "conversation loaded");
 
     // 2. 保存用户消息到 DB（含图片）
-    let mut blocks = vec![ContentBlock::Text { text: content.clone() }];
+    let mut blocks = vec![ContentBlock::Text {
+        text: content.clone(),
+    }];
     if let Some(imgs) = &images {
         for url in imgs {
-            blocks.push(ContentBlock::Image { url: url.clone(), detail: Some("auto".into()) });
+            blocks.push(ContentBlock::Image {
+                url: url.clone(),
+                detail: Some("auto".into()),
+            });
         }
     }
     // 沿用前端生成的 user 消息 id，保证前后端一致（否则前端缓存的 id 在 DB 不存在，
     // 删除/重生成等按 id 操作会 NotFound）
     let mut user_msg = Message::new(&conversation_id, MessageRole::User, blocks);
-    user_msg.id = user_message_id;
-    { let conn = db_conn!(state); let r = ripple_conversation_store::MessageRepo::insert(&conn, &user_msg);
-        if let Err(e) = r { tracing::warn!(error = %e, "save user msg failed"); } }
+    user_msg.id = user_message_id.clone();
+    {
+        let conn = db_conn!(state);
+        ripple_conversation_store::MessageRepo::insert(&conn, &user_msg)
+            .map_err(|e| format!("save user message: {e}"))?;
+    }
 
     // 3. 加载历史
     let conn = db_conn!(state);
-    let history = ripple_conversation_store::MessageRepo::list_by_conversation(&conn, &conversation_id, 50, None).unwrap_or_default();
+    // `do_chat_stream_inner` appends the current prompt below. Exclude the just-persisted
+    // turn from history so the provider receives it exactly once.
+    let history = ripple_conversation_store::MessageRepo::list_by_conversation(
+        &conn,
+        &conversation_id,
+        50,
+        None,
+    )
+    .unwrap_or_default()
+    .into_iter()
+    .filter(|message| message.id != user_message_id)
+    .collect::<Vec<_>>();
     drop(conn);
 
     // 4. 知识库注入 + 设置
-    let kb_inject = inject_knowledge(&content, &state, &api_key).await;
+    let kb_inject = inject_knowledge(&content, &state, &api_key, api_base_url.as_deref()).await;
     tracing::debug!(kb_injected = kb_inject.is_some(), "after inject_knowledge");
-    let ctx_enabled = get_setting_bool(&state, "context_enabled").await.unwrap_or(true);
-    let ctx_window = get_setting_int(&state, "context_recent_window").await.unwrap_or(20) as usize;
-    let ctx_interval = get_setting_int(&state, "context_summary_interval").await.unwrap_or(10) as usize;
-    let ctx_max_tokens = get_setting_int(&state, "context_max_tokens").await.unwrap_or(32000) as usize;
-    let default_model = get_setting_str(&state, "default_model").await
-        .filter(|s| !s.is_empty()).unwrap_or_else(|| "deepseek-v4-flash".into());
+    let ctx_enabled = get_setting_bool(&state, "context_enabled")
+        .await
+        .unwrap_or(true);
+    let ctx_window = get_setting_int(&state, "context_recent_window")
+        .await
+        .unwrap_or(20) as usize;
+    let ctx_interval = get_setting_int(&state, "context_summary_interval")
+        .await
+        .unwrap_or(10) as usize;
+    let ctx_max_tokens = get_setting_int(&state, "context_max_tokens")
+        .await
+        .unwrap_or(32000) as usize;
+    let default_model = get_setting_str(&state, "default_model")
+        .await
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "deepseek-v4-flash".into());
 
     tracing::debug!("calling do_chat_stream_inner");
     // 5. 启动流（共享逻辑）
@@ -87,12 +120,26 @@ pub async fn send_message(
         app.clone(),
         state.active_streams.clone(),
         state.db.clone(),
+        state.key_manager.clone(),
         state.http_client.clone(),
-        &conversation, &history, &content,
-        &api_key, &api_base_url, &model, &default_model, agent_mode,
-        temperature, max_tokens, top_p, kb_inject,
-        ctx_enabled, ctx_window, ctx_interval, ctx_max_tokens,
-    ).await?;
+        &conversation,
+        &history,
+        &content,
+        &api_key,
+        &api_base_url,
+        &model,
+        &default_model,
+        agent_mode,
+        temperature,
+        max_tokens,
+        top_p,
+        kb_inject,
+        ctx_enabled,
+        ctx_window,
+        ctx_interval,
+        ctx_max_tokens,
+    )
+    .await?;
 
     Ok(message_id)
 }
@@ -101,8 +148,11 @@ pub async fn send_message(
 #[allow(clippy::too_many_arguments)]
 async fn do_chat_stream_inner(
     app: AppHandle,
-    active_streams: std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<String, crate::state::ActiveStream>>>,
+    active_streams: std::sync::Arc<
+        tokio::sync::Mutex<std::collections::HashMap<String, crate::state::ActiveStream>>,
+    >,
     db: ripple_conversation_store::DbPool,
+    key_manager: std::sync::Arc<ripple_security::KeyManager>,
     http_client: reqwest::Client,
     conversation: &ripple_core::Conversation,
     history: &[ripple_core::Message],
@@ -126,36 +176,78 @@ async fn do_chat_stream_inner(
     tracing::debug!("dcsi: enter");
 
     let model_id = model.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| {
-        if conversation.model_id == "default" { default_model.to_string() } else { conversation.model_id.clone() }
+        if conversation.model_id == "default" {
+            default_model.to_string()
+        } else {
+            conversation.model_id.clone()
+        }
     });
     // 模型是否支持图片（用模型名判断，不支持则去掉图片块）
-    let supports_vision = model_id.contains("gemini") || model_id.contains("gpt-4o") || model_id.contains("vision") || model_id.contains("claude-3.5") || model_id.contains("claude-3") || model_id.contains("glm-4v");
+    let supports_vision = model_id.contains("gemini")
+        || model_id.contains("gpt-4o")
+        || model_id.contains("vision")
+        || model_id.contains("claude-3.5")
+        || model_id.contains("claude-3")
+        || model_id.contains("glm-4v");
     tracing::debug!("dcsi: before prompt_file_map");
 
-    let mut chat_messages: Vec<ChatMessage> = history.iter().map(|m| {
-        let role = match m.role { MessageRole::System => "system", MessageRole::User => "user", MessageRole::Assistant => "assistant", MessageRole::Tool => "tool" }.into();
-        let content: Vec<ContentBlock> = m.content.iter().filter_map(|block| match block {
-            ContentBlock::Text { .. } => Some(block.clone()),
-            ContentBlock::Image { .. } => Some(block.clone()),
-            ContentBlock::ToolCall { .. } => None,
-            ContentBlock::ToolResult { .. } => None,
-            ContentBlock::Thinking { .. } => None,
-        }).collect();
-        ChatMessage { role, content: if content.is_empty() { vec![ContentBlock::Text { text: m.text() }] } else { content } }
-    }).collect();
+    let mut chat_messages: Vec<ChatMessage> = history
+        .iter()
+        .map(|m| {
+            let role = match m.role {
+                MessageRole::System => "system",
+                MessageRole::User => "user",
+                MessageRole::Assistant => "assistant",
+                MessageRole::Tool => "tool",
+            }
+            .into();
+            let content: Vec<ContentBlock> = m
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    ContentBlock::Text { .. } => Some(block.clone()),
+                    ContentBlock::Image { .. } => Some(block.clone()),
+                    ContentBlock::ToolCall { .. } => None,
+                    ContentBlock::ToolResult { .. } => None,
+                    ContentBlock::Thinking { .. } => None,
+                })
+                .collect();
+            ChatMessage {
+                role,
+                content: if content.is_empty() {
+                    vec![ContentBlock::Text { text: m.text() }]
+                } else {
+                    content
+                },
+            }
+        })
+        .collect();
 
     let agent_mode = agent_mode.unwrap_or(false);
     // 读取 settings 中的 {KEY}→文件路径映射；首次使用时自动创建默认 TOOLS 映射
     let prompt_file_map: std::collections::HashMap<String, String> = (|| {
-        let conn = match db.get_timeout(std::time::Duration::from_secs(3)) { Ok(c) => c, Err(_) => return std::collections::HashMap::new() };
-        let existing: Option<String> = conn.query_row(
-            "SELECT value FROM settings WHERE key='prompt_file_map'", [], |r| r.get(0),
-        ).ok();
+        let conn = match db.get_timeout(std::time::Duration::from_secs(3)) {
+            Ok(c) => c,
+            Err(_) => return std::collections::HashMap::new(),
+        };
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key='prompt_file_map'",
+                [],
+                |r| r.get(0),
+            )
+            .ok();
         let map: std::collections::HashMap<String, String> = existing
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-        if map.contains_key("TOOL_RULES") { return map; }
-        let rules_path = project_root().join("prompts").join("tool_rules.txt").to_string_lossy().to_string();
+        if map.contains_key("TOOL_RULES") {
+            return map;
+        }
+        let rules_path = project_root()
+            .join("prompts")
+            .join("tool_rules.txt")
+            .to_string_lossy()
+            .to_string();
         let mut new_map = map;
         new_map.insert("TOOL_RULES".into(), rules_path);
         if let Ok(json) = serde_json::to_string(&new_map) {
@@ -168,11 +260,16 @@ async fn do_chat_stream_inner(
     })();
     tracing::debug!("dcsi: after prompt_file_map");
     let mut sys_text = resolve_agent_placeholders(
-        conversation.system_prompt.as_deref().unwrap_or("You are a helpful AI assistant."),
+        conversation
+            .system_prompt
+            .as_deref()
+            .unwrap_or("You are a helpful AI assistant."),
         &prompt_file_map,
     );
     tracing::debug!("dcsi: after resolve_agent_placeholders");
-    if let Some(inject) = kb_inject_text { sys_text = format!("{sys_text}\n\n--- Knowledge base ---\n{inject}\n---"); }
+    if let Some(inject) = kb_inject_text {
+        sys_text = format!("{sys_text}\n\n--- Knowledge base ---\n{inject}\n---");
+    }
     if agent_mode {
         sys_text = format!("{sys_text}\n\n{{TOOL_RULES}}");
         sys_text = resolve_agent_placeholders(&sys_text, &prompt_file_map);
@@ -185,10 +282,19 @@ async fn do_chat_stream_inner(
         .get("agent_id")
         .and_then(|v| v.as_str())
         .unwrap_or("default");
-    let mem_base_url = api_base_url.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| "http://192.168.0.123:3000/v1".into());
+    let mem_base_url = api_base_url
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "http://192.168.0.123:3000/v1".into());
     if let Some(mem_block) = crate::commands::memory::build_memory_prompt(
-        &db, mem_agent_id, content, api_key, &mem_base_url,
-    ).await {
+        &db,
+        mem_agent_id,
+        content,
+        api_key,
+        &mem_base_url,
+    )
+    .await
+    {
         sys_text = format!("{sys_text}\n\n--- Agent Memories ---\n{mem_block}");
         tracing::debug!("memory injected");
     }
@@ -204,12 +310,38 @@ async fn do_chat_stream_inner(
         let counter = std::sync::Arc::new(ripple_context::CharApproxCounter);
         let summarizer = std::sync::Arc::new(ripple_context::TemplateSummarizer::default());
         let builder = ripple_context::ContextBuilder::new(config, counter, summarizer);
-        let ctx = builder.assemble(Some(&sys_text), history, setting_ctx_max_tokens.max(4000), 4096).await;
-        chat_messages = ctx.messages.iter().map(|m| ChatMessage { role: m.role.clone(), content: m.content.clone() }).collect();
+        let ctx = builder
+            .assemble(
+                Some(&sys_text),
+                history,
+                setting_ctx_max_tokens.max(4000),
+                4096,
+            )
+            .await;
+        chat_messages = ctx
+            .messages
+            .iter()
+            .map(|m| ChatMessage {
+                role: m.role.clone(),
+                content: m.content.clone(),
+            })
+            .collect();
         chat_messages.push(ChatMessage::user(content));
-        if ctx.truncated { tracing::info!(tokens = ctx.total_tokens, summaries = ctx.summary_count, "context truncated"); }
+        if ctx.truncated {
+            tracing::info!(
+                tokens = ctx.total_tokens,
+                summaries = ctx.summary_count,
+                "context truncated"
+            );
+        }
     } else {
-        chat_messages.insert(0, ChatMessage { role: "system".into(), content: vec![ContentBlock::Text { text: sys_text }] });
+        chat_messages.insert(
+            0,
+            ChatMessage {
+                role: "system".into(),
+                content: vec![ContentBlock::Text { text: sys_text }],
+            },
+        );
         chat_messages.push(ChatMessage::user(content));
     }
     tracing::debug!("dcsi: after ctx/manual building");
@@ -219,20 +351,31 @@ async fn do_chat_stream_inner(
     // 这里在两条路径汇合后统一处理：非视觉模型把 Image 替换为文本占位。
     if !supports_vision {
         for msg in &mut chat_messages {
-            msg.content = msg.content.iter().map(|b| match b {
-                ContentBlock::Image { .. } => ContentBlock::Text { text: "[图片]".into() },
-                other => other.clone(),
-            }).collect();
+            msg.content = msg
+                .content
+                .iter()
+                .map(|b| match b {
+                    ContentBlock::Image { .. } => ContentBlock::Text {
+                        text: "[图片]".into(),
+                    },
+                    other => other.clone(),
+                })
+                .collect();
             if msg.content.is_empty() {
-                msg.content = vec![ContentBlock::Text { text: String::new() }];
+                msg.content = vec![ContentBlock::Text {
+                    text: String::new(),
+                }];
             }
         }
     }
 
     // model_id 已在第 116 行定义
     tracing::debug!("dcsi: before provider");
-    let base_url = api_base_url.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| "http://192.168.0.123:3000/v1".into());
-    let provider = OpenAiProvider::with_client("newapi", "newapi", &base_url, http_client);
+    let base_url = api_base_url
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "http://192.168.0.123:3000/v1".into());
+    let provider = OpenAiProvider::with_client("newapi", "newapi", &base_url, http_client.clone());
     tracing::debug!("dcsi: before builtin_tools");
 
     let chat_request = ChatRequest {
@@ -248,17 +391,30 @@ async fn do_chat_stream_inner(
     tracing::info!(%base_url, "request built (do_chat_stream_inner)");
 
     let message_id = uuid::Uuid::new_v4().to_string();
+    let stream_id = uuid::Uuid::new_v4().to_string();
     let conv_id = conversation.id.clone();
 
     let cancel = std::sync::Arc::new(tokio::sync::Notify::new());
     let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    active_streams.lock().await.insert(conv_id.clone(), crate::state::ActiveStream {
-        conversation_id: conv_id.clone(),
-        cancel: cancel.clone(),
-        cancelled: cancelled.clone(),
-    });
+    let previous = active_streams.lock().await.insert(
+        conv_id.clone(),
+        crate::state::ActiveStream {
+            stream_id: stream_id.clone(),
+            conversation_id: conv_id.clone(),
+            message_id: message_id.clone(),
+            cancel: cancel.clone(),
+            cancelled: cancelled.clone(),
+        },
+    );
+    if let Some(previous) = previous {
+        previous
+            .cancelled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        previous.cancel.notify_waiters();
+    }
 
     let spawn_msg_id = message_id.clone();
+    let spawn_stream_id = stream_id.clone();
     let conv_id2 = conv_id.clone();
     let agent_id_clone = conversation
         .metadata
@@ -269,36 +425,75 @@ async fn do_chat_stream_inner(
     let api_key_clone = api_key.to_string();
     let api_base_url_clone = api_base_url.clone();
     let db2 = db.clone();
+    let key_manager2 = key_manager.clone();
     let streams2 = active_streams.clone();
     let cancel2 = cancel.clone();
     let cancelled2 = cancelled.clone();
 
     tokio::spawn(async move {
         tracing::info!("spawned stream task (do_chat_stream_inner)");
-        let result = chat_with_tools(&app, &provider, &api_key_clone, &api_base_url_clone, chat_request, &conv_id2, &agent_id_clone, &spawn_msg_id, &model_id, &db2, &cancel2, &cancelled2).await;
+        let result = chat_with_tools(
+            &app,
+            &provider,
+            &api_key_clone,
+            &api_base_url_clone,
+            chat_request,
+            &spawn_stream_id,
+            &conv_id2,
+            &agent_id_clone,
+            &spawn_msg_id,
+            &model_id,
+            &db2,
+            &key_manager2,
+            &http_client,
+            &cancel2,
+            &cancelled2,
+        )
+        .await;
 
-        streams2.lock().await.remove(&conv_id2);
+        let mut streams = streams2.lock().await;
+        if streams
+            .get(&conv_id2)
+            .is_some_and(|active| active.stream_id == spawn_stream_id)
+        {
+            streams.remove(&conv_id2);
+        }
+        drop(streams);
 
-        if let Ok(text) = &result {
-            if !text.is_empty() {
+        if let Ok(run) = &result {
+            if !run.content.is_empty() {
                 let msg = Message {
                     id: spawn_msg_id.clone(),
                     conversation_id: conv_id2.clone(),
                     role: MessageRole::Assistant,
-                    content: vec![ContentBlock::Text { text: text.clone() }],
-                    created_at: chrono::Utc::now(), token_count: None,
-                    metadata: serde_json::json!({}),
+                    content: run.content.clone(),
+                    created_at: chrono::Utc::now(),
+                    token_count: Some(run.usage.total_tokens as i32),
+                    metadata: serde_json::json!({
+                        "completion_state": run.outcome,
+                        "finish_reason": run.finish_reason,
+                    }),
                 };
                 if let Ok(conn) = db2.get_timeout(Duration::from_secs(3)) {
                     if let Err(e) = ripple_conversation_store::MessageRepo::insert(&conn, &msg) {
-                        tracing::warn!(error = %e, "save assistant msg failed");
+                        tracing::error!(error = %e, "save assistant msg failed");
                     }
                 }
             }
         }
         if let Err(e) = &result {
             tracing::error!(error = %e, "stream error");
-            let _ = app.emit("chat:gen-error", GenErrorPayload { conversation_id: conv_id2, message_id: spawn_msg_id, error: e.to_string() });
+            let _ = app.emit(
+                "chat:gen-error",
+                GenErrorPayload {
+                    contract_version: 1,
+                    stream_id: spawn_stream_id,
+                    conversation_id: conv_id2,
+                    message_id: spawn_msg_id,
+                    seq: 0,
+                    error: e.to_string(),
+                },
+            );
         }
     });
 
@@ -323,12 +518,12 @@ pub async fn stop_generation(
 
 /// 重生成：删除指定消息之后的内容，重新运行生成流程
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn regenerate(
     app: AppHandle,
     state: State<'_, AppState>,
     conversation_id: String,
     message_id: String,
-    api_key: String,
     api_base_url: Option<String>,
     model: Option<String>,
     agent_mode: Option<bool>,
@@ -337,6 +532,7 @@ pub async fn regenerate(
     top_p: Option<f64>,
 ) -> Result<String, String> {
     tracing::info!(%conversation_id, %message_id, "regenerate start");
+    let api_key = crate::commands::settings::load_api_key(&state)?;
 
     // 0. 停止该会话进行中的流。否则旧流的 spawned task 仍在写 DB（保存助手消息），
     //    与本次 delete_from 的写锁竞争，busy_timeout 内拿不到锁 → "db timeout"。
@@ -363,14 +559,24 @@ pub async fn regenerate(
     //    delete_from 用 rowid > 保留选中消息本身。
     {
         let conn = db_conn!(state);
-        if let Err(e) = ripple_conversation_store::MessageRepo::delete_from(&conn, &conversation_id, &message_id) {
+        if let Err(e) = ripple_conversation_store::MessageRepo::truncate_after(
+            &conn,
+            &conversation_id,
+            &message_id,
+        ) {
             tracing::warn!(error = %e, "regenerate delete_from failed");
-            return Err(format!("regenerate: cannot locate message {message_id}: {e}"));
+            return Err(format!(
+                "regenerate: cannot locate message {message_id}: {e}"
+            ));
         }
         // 如果选中的是 assistant 消息，还要删除消息本身（重新生成它）
-        let role: Option<String> = conn.query_row(
-            "SELECT role FROM messages WHERE id = ?1", [&message_id], |r| r.get(0),
-        ).ok();
+        let role: Option<String> = conn
+            .query_row(
+                "SELECT role FROM messages WHERE id = ?1",
+                [&message_id],
+                |r| r.get(0),
+            )
+            .ok();
         if role.as_deref() == Some("assistant") {
             conn.execute("DELETE FROM messages WHERE id = ?1", [&message_id])
                 .map_err(|e| e.to_string())?;
@@ -380,7 +586,13 @@ pub async fn regenerate(
 
     // 3. 加载剩余历史
     let conn = db_conn!(state);
-    let mut history = ripple_conversation_store::MessageRepo::list_by_conversation(&conn, &conversation_id, 50, None).unwrap_or_default();
+    let mut history = ripple_conversation_store::MessageRepo::list_by_conversation(
+        &conn,
+        &conversation_id,
+        50,
+        None,
+    )
+    .unwrap_or_default();
     drop(conn);
 
     // 4. 获取最后一条 user 消息的内容并移除（避免 do_chat_stream_inner 重复添加用户消息，
@@ -396,14 +608,27 @@ pub async fn regenerate(
     }
 
     // 5. 知识库注入 + 设置
-    let kb_inject = inject_knowledge(&content, &state, &api_key).await;
-    tracing::debug!(kb_injected = kb_inject.is_some(), "regenerate after inject_knowledge");
-    let ctx_enabled = get_setting_bool(&state, "context_enabled").await.unwrap_or(true);
-    let ctx_window = get_setting_int(&state, "context_recent_window").await.unwrap_or(20) as usize;
-    let ctx_interval = get_setting_int(&state, "context_summary_interval").await.unwrap_or(10) as usize;
-    let ctx_max_tokens = get_setting_int(&state, "context_max_tokens").await.unwrap_or(32000) as usize;
-    let default_model = get_setting_str(&state, "default_model").await
-        .filter(|s| !s.is_empty()).unwrap_or_else(|| "deepseek-v4-flash".into());
+    let kb_inject = inject_knowledge(&content, &state, &api_key, api_base_url.as_deref()).await;
+    tracing::debug!(
+        kb_injected = kb_inject.is_some(),
+        "regenerate after inject_knowledge"
+    );
+    let ctx_enabled = get_setting_bool(&state, "context_enabled")
+        .await
+        .unwrap_or(true);
+    let ctx_window = get_setting_int(&state, "context_recent_window")
+        .await
+        .unwrap_or(20) as usize;
+    let ctx_interval = get_setting_int(&state, "context_summary_interval")
+        .await
+        .unwrap_or(10) as usize;
+    let ctx_max_tokens = get_setting_int(&state, "context_max_tokens")
+        .await
+        .unwrap_or(32000) as usize;
+    let default_model = get_setting_str(&state, "default_model")
+        .await
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "deepseek-v4-flash".into());
 
     tracing::debug!("regenerate calling do_chat_stream_inner");
     // 6. 复用核心流逻辑
@@ -411,12 +636,26 @@ pub async fn regenerate(
         app.clone(),
         state.active_streams.clone(),
         state.db.clone(),
+        state.key_manager.clone(),
         state.http_client.clone(),
-        &conversation, &history, &content,
-        &api_key, &api_base_url, &model, &default_model, agent_mode,
-        temperature, max_tokens, top_p, kb_inject,
-        ctx_enabled, ctx_window, ctx_interval, ctx_max_tokens,
-    ).await?;
+        &conversation,
+        &history,
+        &content,
+        &api_key,
+        &api_base_url,
+        &model,
+        &default_model,
+        agent_mode,
+        temperature,
+        max_tokens,
+        top_p,
+        kb_inject,
+        ctx_enabled,
+        ctx_window,
+        ctx_interval,
+        ctx_max_tokens,
+    )
+    .await?;
 
     Ok(msg_id)
 }
@@ -425,22 +664,61 @@ pub async fn regenerate(
 
 #[derive(Clone, Serialize)]
 pub struct StreamChunkPayload {
+    pub contract_version: u8,
+    pub stream_id: String,
     pub conversation_id: String,
     pub message_id: String,
+    pub seq: u64,
     pub delta_text: Option<String>,
     pub finish_reason: Option<String>,
 }
 #[derive(Clone, Serialize)]
 pub struct GenCompletePayload {
+    pub contract_version: u8,
+    pub stream_id: String,
     pub conversation_id: String,
     pub message_id: String,
+    pub seq: u64,
+    pub outcome: CompletionOutcome,
+    pub finish_reason: Option<String>,
     pub usage: UsageInfo,
 }
 #[derive(Clone, Serialize)]
 pub struct GenErrorPayload {
+    pub contract_version: u8,
+    pub stream_id: String,
     pub conversation_id: String,
     pub message_id: String,
+    pub seq: u64,
     pub error: String,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletionOutcome {
+    Completed,
+    Cancelled,
+}
+
+#[derive(Clone, Serialize)]
+pub struct ToolCallEventPayload {
+    pub contract_version: u8,
+    pub stream_id: String,
+    pub conversation_id: String,
+    pub message_id: String,
+    pub seq: u64,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub tool_input: serde_json::Value,
+    pub tool_output: String,
+    pub status: String,
+}
+
+struct ChatRunResult {
+    content: Vec<ContentBlock>,
+    outcome: &'static str,
+    usage: UsageInfo,
+    finish_reason: Option<String>,
 }
 
 /// 工具调用循环
@@ -451,7 +729,9 @@ async fn check_tool_approval(
     agent_id: &str,
     tool_name: &str,
 ) -> (bool, String) {
-    use crate::commands::plugins::{tool_requires_approval, agent_permission_level, is_tool_trusted};
+    use crate::commands::plugins::{
+        agent_permission_level, is_tool_trusted, tool_requires_approval,
+    };
     if !tool_requires_approval(tool_name) {
         return (false, String::new());
     }
@@ -511,31 +791,34 @@ async fn request_tool_approval(
     }
 }
 
-/// 对简单的 HTML 特殊字符做转义，防止工具输出中的 &<> 破坏嵌入的 HTML 结构。
-fn html_escape(s: &str) -> String {
-    s.chars().map(|c| match c { '&' => "&amp;".into(), '<' => "&lt;".into(), '>' => "&gt;".into(), _ => c.to_string() }).collect()
-}
-
+#[allow(clippy::too_many_arguments)]
 async fn chat_with_tools(
     app: &AppHandle,
     provider: &OpenAiProvider,
     api_key: &str,
-    api_base_url: &Option<String>,
+    _api_base_url: &Option<String>,
     mut request: ChatRequest,
+    stream_id: &str,
     conversation_id: &str,
     agent_id: &str,
     message_id: &str,
     model: &str,
     db: &ripple_conversation_store::DbPool,
+    key_manager: &std::sync::Arc<ripple_security::KeyManager>,
+    http_client: &reqwest::Client,
     cancel: &std::sync::Arc<tokio::sync::Notify>,
     cancelled: &std::sync::Arc<std::sync::atomic::AtomicBool>,
-) -> Result<String, String> {
-    use tauri::Emitter;
+) -> Result<ChatRunResult, String> {
     use std::collections::HashMap;
     use std::sync::atomic::Ordering;
+    use tauri::Emitter;
 
     let mut collected_text = String::new();
+    let mut persisted_blocks: Vec<ContentBlock> = Vec::new();
     let mut tool_calls: HashMap<u32, ToolCallAccum> = HashMap::new();
+    let mut last_usage = UsageInfo::default();
+    let mut finish_reason: Option<String> = None;
+    let mut seq = 0u64;
     let mut had_error = false;
     const MAX_TOOL_ROUNDS: u32 = 8;
     let mut iterations = 0u32;
@@ -555,7 +838,10 @@ async fn chat_with_tools(
         let mut local_text = String::new();
         tool_calls.clear();
 
-        let stream = provider.chat_stream(api_key, request.clone()).await.map_err(|e| e.to_string())?;
+        let stream = provider
+            .chat_stream(api_key, request.clone())
+            .await
+            .map_err(|e| e.to_string())?;
 
         // 消费流；与取消信号竞速，stop 时立即中断 HTTP 流
         let mut aborted = false;
@@ -566,9 +852,13 @@ async fn chat_with_tools(
                         tracing::debug!(len = text.len(), "stream text delta");
                         local_text.push_str(&text);
                         collected_text.push_str(&text);
+                        seq += 1;
                         let _ = app.emit("chat:stream-chunk", StreamChunkPayload {
+                            contract_version: 1,
+                            stream_id: stream_id.to_string(),
                             conversation_id: conversation_id.to_string(),
                             message_id: message_id.to_string(),
+                            seq,
                             delta_text: Some(text), finish_reason: None,
                         });
                     }
@@ -582,11 +872,19 @@ async fn chat_with_tools(
                                 if let Some(frag) = tc.arguments_fragment { e.arguments.push_str(&frag); }
                             }
                         }
+                        if let Some(usage) = chunk.usage {
+                            last_usage = usage;
+                        }
                         if let Some(reason) = chunk.finish_reason {
                             tracing::debug!(reason = %reason, "stream finish");
+                            finish_reason = Some(reason.clone());
+                            seq += 1;
                             let _ = app.emit("chat:stream-chunk", StreamChunkPayload {
+                                contract_version: 1,
+                                stream_id: stream_id.to_string(),
                                 conversation_id: conversation_id.to_string(),
                                 message_id: message_id.to_string(),
+                                seq,
                                 delta_text: None, finish_reason: Some(reason),
                             });
                         }
@@ -609,27 +907,37 @@ async fn chat_with_tools(
             break;
         }
 
-        if tool_calls.is_empty() { break; }
+        if tool_calls.is_empty() {
+            break;
+        }
 
         tracing::info!(count = tool_calls.len(), "executing tool calls");
 
         // Assistant 消息（含 tool_call）
         let mut blocks: Vec<ContentBlock> = Vec::new();
-        if !local_text.is_empty() { blocks.push(ContentBlock::Text { text: local_text.clone() }); }
-        for (_, tc) in &tool_calls {
+        if !local_text.is_empty() {
+            blocks.push(ContentBlock::Text {
+                text: local_text.clone(),
+            });
+        }
+        for tc in tool_calls.values() {
             blocks.push(ContentBlock::ToolCall {
                 id: tc.id.clone().unwrap_or_default(),
                 name: tc.name.clone().unwrap_or_default(),
                 arguments: serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null),
             });
         }
-        request.messages.push(ChatMessage { role: "assistant".into(), content: blocks });
+        request.messages.push(ChatMessage {
+            role: "assistant".into(),
+            content: blocks,
+        });
         request.model = model.to_string();
 
         // 执行工具 + 推结果 + 发事件
-        for (_, tc) in &tool_calls {
+        for tc in tool_calls.values() {
             let name = tc.name.as_deref().unwrap_or("unknown");
-            let args: serde_json::Value = serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
+            let args: serde_json::Value =
+                serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
 
             // 审批门控：按 Agent 权限级别（strict/elevated/full）+ 信任表决定是否需用户确认
             if crate::commands::plugins::tool_requires_approval(name) {
@@ -640,7 +948,9 @@ async fn chat_with_tools(
                             // elevated 模式下用户勾选「信任此工具」→ 记录，后续该工具自动放行
                             if trust_tool && level == "elevated" {
                                 if let Ok(conn) = db.get_timeout(Duration::from_secs(3)) {
-                                    let _ = crate::commands::plugins::add_trusted_tool(&conn, agent_id, name);
+                                    let _ = crate::commands::plugins::add_trusted_tool(
+                                        &conn, agent_id, name,
+                                    );
                                 }
                             }
                         }
@@ -649,11 +959,36 @@ async fn chat_with_tools(
                             let tid = tc.id.clone().unwrap_or_default();
                             request.messages.push(ChatMessage {
                                 role: "tool".into(),
-                                content: vec![ContentBlock::ToolResult { tool_call_id: tid, content: output.clone() }],
+                                content: vec![ContentBlock::ToolResult {
+                                    tool_call_id: tid.clone(),
+                                    content: output.clone(),
+                                }],
                             });
-                            let _ = app.emit("chat:tool-call", serde_json::json!({
-                                "tool_name": name, "tool_input": tc.arguments, "tool_output": output, "status": "rejected", "message_id": message_id
-                            }));
+                            persisted_blocks.push(ContentBlock::ToolCall {
+                                id: tid.clone(),
+                                name: name.to_string(),
+                                arguments: args.clone(),
+                            });
+                            persisted_blocks.push(ContentBlock::ToolResult {
+                                tool_call_id: tid.clone(),
+                                content: output.clone(),
+                            });
+                            seq += 1;
+                            let _ = app.emit(
+                                "chat:tool-call",
+                                ToolCallEventPayload {
+                                    contract_version: 1,
+                                    stream_id: stream_id.to_string(),
+                                    conversation_id: conversation_id.to_string(),
+                                    message_id: message_id.to_string(),
+                                    seq,
+                                    tool_call_id: tid,
+                                    tool_name: name.to_string(),
+                                    tool_input: args.clone(),
+                                    tool_output: output,
+                                    status: "rejected".into(),
+                                },
+                            );
                             tracing::info!(tool = %name, "tool call rejected by user");
                             continue;
                         }
@@ -662,11 +997,36 @@ async fn chat_with_tools(
                             let tid = tc.id.clone().unwrap_or_default();
                             request.messages.push(ChatMessage {
                                 role: "tool".into(),
-                                content: vec![ContentBlock::ToolResult { tool_call_id: tid, content: output.clone() }],
+                                content: vec![ContentBlock::ToolResult {
+                                    tool_call_id: tid.clone(),
+                                    content: output.clone(),
+                                }],
                             });
-                            let _ = app.emit("chat:tool-call", serde_json::json!({
-                                "tool_name": name, "tool_input": tc.arguments, "tool_output": output, "status": "error", "message_id": message_id
-                            }));
+                            persisted_blocks.push(ContentBlock::ToolCall {
+                                id: tid.clone(),
+                                name: name.to_string(),
+                                arguments: args.clone(),
+                            });
+                            persisted_blocks.push(ContentBlock::ToolResult {
+                                tool_call_id: tid.clone(),
+                                content: output.clone(),
+                            });
+                            seq += 1;
+                            let _ = app.emit(
+                                "chat:tool-call",
+                                ToolCallEventPayload {
+                                    contract_version: 1,
+                                    stream_id: stream_id.to_string(),
+                                    conversation_id: conversation_id.to_string(),
+                                    message_id: message_id.to_string(),
+                                    seq,
+                                    tool_call_id: tid,
+                                    tool_name: name.to_string(),
+                                    tool_input: args.clone(),
+                                    tool_output: output,
+                                    status: "error".into(),
+                                },
+                            );
                             tracing::warn!(tool = %name, error = %e, "tool approval failed");
                             continue;
                         }
@@ -677,12 +1037,15 @@ async fn chat_with_tools(
 
             let exec = match name {
                 "calculator" => crate::commands::tools::exec_calculator(&args),
-                "rag_search" => exec_rag_search(db, api_key, &args).await,
+                "rag_search" => exec_rag_search(db, http_client, api_key, &args).await,
                 "get_time_info" => Ok(crate::commands::tools::exec_get_time_info(&args)?),
                 "get_weather" => crate::commands::tools::exec_get_weather(&args).await,
-                "remember" => crate::commands::memory::exec_remember(db, conversation_id, &args).await,
+                "remember" => {
+                    crate::commands::memory::exec_remember(db, key_manager, conversation_id, &args)
+                        .await
+                }
                 other if other.starts_with("plugin_") => {
-                    crate::commands::plugins::exec_by_tool_name(other, &args, Some(api_key), api_base_url.as_deref()).await
+                    crate::commands::plugins::exec_by_tool_name(other, &args, None, None).await
                 }
                 other => Err(format!("unknown tool: {other}")),
             };
@@ -691,79 +1054,145 @@ async fn chat_with_tools(
                 Err(e) => ("error".to_string(), e.clone()),
             };
 
-            tracing::info!(tool = %name, status = %status, "tool executed");
-            // debug 模式下记录工具入参/出参（可能很长，仅 debug）
-            tracing::debug!(tool = %name, input = %tc.arguments, output = %output, "tool call detail");
+            tracing::info!(tool = %name, status = %status, input_len = tc.arguments.len(), output_len = output.len(), "tool executed");
 
             let tid = tc.id.clone().unwrap_or_default();
             request.messages.push(ChatMessage {
                 role: "tool".into(),
-                content: vec![ContentBlock::ToolResult { tool_call_id: tid, content: output.clone() }],
+                content: vec![ContentBlock::ToolResult {
+                    tool_call_id: tid.clone(),
+                    content: output.clone(),
+                }],
             });
 
-            let payload = serde_json::json!({ "tool_name": name, "tool_input": tc.arguments, "tool_output": output, "status": status, "message_id": message_id });
+            persisted_blocks.push(ContentBlock::ToolCall {
+                id: tid.clone(),
+                name: name.to_string(),
+                arguments: args.clone(),
+            });
+            persisted_blocks.push(ContentBlock::ToolResult {
+                tool_call_id: tid.clone(),
+                content: output.clone(),
+            });
+            seq += 1;
+            let payload = ToolCallEventPayload {
+                contract_version: 1,
+                stream_id: stream_id.to_string(),
+                conversation_id: conversation_id.to_string(),
+                message_id: message_id.to_string(),
+                seq,
+                tool_call_id: tid,
+                tool_name: name.to_string(),
+                tool_input: args,
+                tool_output: output,
+                status,
+            };
             let _ = app.emit("chat:tool-call", payload);
-
-            // 把工具结果以 HTML 形式嵌入到流式输出中（前端 rehype-raw 渲染），而非独立 ToolCallCard
-            if status == "success" {
-                let html_output = html_escape(&output);
-                let tool_html = format!(
-                    "\n\n<div style=\"background: hsl(var(--muted)); border: 1px solid hsl(var(--border)); border-radius: 8px; padding: 12px; margin: 8px 0;\">\n\
-                    <div style=\"font-size: 11px; color: hsl(var(--muted-foreground)); margin-bottom: 6px;\">🔧 {} 结果</div>\n\
-                    <pre style=\"margin: 0; font-size: 13px; line-height: 1.5; overflow-x: auto;\"><code>{}</code></pre>\n\
-                    </div>\n",
-                    name, html_output,
-                );
-                local_text.push_str(&tool_html);
-                let _ = app.emit("chat:stream-chunk", serde_json::json!({
-                    "conversation_id": conversation_id,
-                    "message_id": message_id,
-                    "text": tool_html,
-                }));
-            }
         }
     }
 
-    // 流错误：通知前端，并返回已收集的部分文本（由 spawn 落库），避免静默截断当成功
+    // 流错误发送唯一 failed 终态，并把部分内容作为 failed assistant turn 持久化。
     if had_error {
-        let _ = app.emit("chat:gen-error", GenErrorPayload {
-            conversation_id: conversation_id.to_string(),
-            message_id: message_id.to_string(),
-            error: "stream error".into(),
+        if !collected_text.is_empty() {
+            persisted_blocks.insert(
+                0,
+                ContentBlock::Text {
+                    text: collected_text,
+                },
+            );
+        }
+        seq += 1;
+        let _ = app.emit(
+            "chat:gen-error",
+            GenErrorPayload {
+                contract_version: 1,
+                stream_id: stream_id.to_string(),
+                conversation_id: conversation_id.to_string(),
+                message_id: message_id.to_string(),
+                seq,
+                error: "stream error".into(),
+            },
+        );
+        return Ok(ChatRunResult {
+            content: persisted_blocks,
+            outcome: "failed",
+            usage: last_usage,
+            finish_reason,
         });
-        return Ok(collected_text);
     }
 
-    // 正常完成或被 stop 中断：发 gen-complete，前端据此 finalize 已显示的部分文本
-    let _ = app.emit("chat:gen-complete", GenCompletePayload {
-        conversation_id: conversation_id.to_string(),
-        message_id: message_id.to_string(),
-        usage: UsageInfo::default(),
-    });
+    if !collected_text.is_empty() {
+        persisted_blocks.insert(
+            0,
+            ContentBlock::Text {
+                text: collected_text.clone(),
+            },
+        );
+    }
+    let outcome = if cancelled.load(Ordering::SeqCst) {
+        CompletionOutcome::Cancelled
+    } else {
+        CompletionOutcome::Completed
+    };
+    let outcome_name = match outcome {
+        CompletionOutcome::Completed => "completed",
+        CompletionOutcome::Cancelled => "cancelled",
+    };
+    seq += 1;
+    let _ = app.emit(
+        "chat:gen-complete",
+        GenCompletePayload {
+            contract_version: 1,
+            stream_id: stream_id.to_string(),
+            conversation_id: conversation_id.to_string(),
+            message_id: message_id.to_string(),
+            seq,
+            outcome,
+            finish_reason: finish_reason.clone(),
+            usage: last_usage,
+        },
+    );
 
-    Ok(collected_text)
+    Ok(ChatRunResult {
+        content: persisted_blocks,
+        outcome: outcome_name,
+        usage: last_usage,
+        finish_reason,
+    })
 }
 
 /// 执行 RAG 搜索
 async fn exec_rag_search(
     db: &ripple_conversation_store::DbPool,
+    http_client: &reqwest::Client,
     api_key: &str,
     args: &serde_json::Value,
 ) -> Result<String, String> {
-    let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let _kb_id = args.get("kb_id").and_then(|v| v.as_str());
-    if query.is_empty() { return Err("missing query".into()); }
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let kb_id = args.get("kb_id").and_then(|v| v.as_str());
+    if query.is_empty() {
+        return Err("missing query".into());
+    }
 
-    let client = ripple_rag::EmbeddingClient::new(
-        "http://192.168.0.123:3000/v1", api_key, "Qwen/Qwen3-Embedding-8B",
-    )?;
+    let client = ripple_rag::EmbeddingClient::with_client(
+        http_client.clone(),
+        "http://192.168.0.123:3000/v1",
+        api_key,
+        "Qwen/Qwen3-Embedding-8B",
+    );
     // 先获取嵌入（网络调用，可能耗时数秒），不持有 DB 连接，避免连接池耗尽。
     // 加 20s 超时，避免工具调用因 embed 挂起而长时间无响应。
     let emb = tokio::time::timeout(Duration::from_secs(20), client.embed(&query))
         .await
         .map_err(|_| "embedding timeout (20s)".to_string())??;
-    let conn = db.get_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
-    let results = ripple_rag::store::hybrid_search(&conn, &emb, &query, None, 5)?;
+    let conn = db
+        .get_timeout(Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
+    let results = ripple_rag::store::hybrid_search(&conn, &emb, &query, kb_id, 5)?;
 
     if results.is_empty() {
         return Ok("No relevant information found in the knowledge base.".into());
@@ -771,82 +1200,151 @@ async fn exec_rag_search(
 
     let mut out = String::from("Knowledge base results:\n\n");
     for (i, r) in results.iter().enumerate() {
-        out.push_str(&format!("[{i}] [doc: {}] (score: {:.3})\n{}\n\n", r.doc_name, r.score, r.content));
+        out.push_str(&format!(
+            "[{i}] [doc: {}] (score: {:.3})\n{}\n\n",
+            r.doc_name, r.score, r.content
+        ));
     }
     Ok(out)
 }
 
 /// 从用户消息中检测 @知识库 并检索注入
-async fn inject_knowledge(content: &str, state: &State<'_, AppState>, api_key: &str) -> Option<String> {
+async fn inject_knowledge(
+    content: &str,
+    state: &State<'_, AppState>,
+    api_key: &str,
+    requested_base_url: Option<&str>,
+) -> Option<String> {
     // 查找 @xxx 模式
     let content_chars: Vec<char> = content.chars().collect();
     let mut kb_names = Vec::new();
     let mut i = 0;
     while i < content_chars.len() {
-        if content_chars[i] == '@' && i + 1 < content_chars.len() && content_chars[i + 1].is_alphabetic() {
+        if content_chars[i] == '@'
+            && i + 1 < content_chars.len()
+            && content_chars[i + 1].is_alphabetic()
+        {
             let start = i + 1;
             let mut end = start;
             while end < content_chars.len() && content_chars[end].is_alphanumeric() {
                 end += 1;
             }
-            if end > start { kb_names.push(content_chars[start..end].iter().collect::<String>()); }
+            if end > start {
+                kb_names.push(content_chars[start..end].iter().collect::<String>());
+            }
             i = end;
-        } else { i += 1; }
+        } else {
+            i += 1;
+        }
     }
-    if kb_names.is_empty() { return None; }
+    if kb_names.is_empty() {
+        return None;
+    }
 
     // 先查所有匹配的 KB（用完即释放连接，避免跨 embed 网络调用长期持有）
     let kb_ids: Vec<(String, String)> = {
-        let conn = state.db.get_timeout(std::time::Duration::from_secs(5)).ok()?;
+        let conn = state
+            .db
+            .get_timeout(std::time::Duration::from_secs(5))
+            .ok()?;
         let mut kb_ids = Vec::new();
         if let Ok(mut stmt) = conn.prepare("SELECT id, name FROM knowledge_bases") {
-            if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?))) {
+            if let Ok(rows) =
+                stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            {
                 for row in rows.flatten() {
                     for name in &kb_names {
-                        if row.1.contains(name) { kb_ids.push((row.0.clone(), row.1.clone())); break; }
+                        if row.1.contains(name) {
+                            kb_ids.push((row.0.clone(), row.1.clone()));
+                            break;
+                        }
                     }
                 }
             }
         }
         kb_ids
     };
-    if kb_ids.is_empty() { return None; }
+    if kb_ids.is_empty() {
+        return None;
+    }
 
     // 嵌入查询（网络调用），不持有 DB 连接。
     // 加 15s 超时：embedding 端点慢/挂起时不应阻塞 send_message 返回（会触发前端 30s IPC 超时）。
     // 超时则跳过注入（降级，本次回答不带知识库上下文）。
-    let client = ripple_rag::EmbeddingClient::new("http://192.168.0.123:3000/v1", api_key, "Qwen/Qwen3-Embedding-8B").ok()?;
+    let base_url = match requested_base_url.filter(|value| !value.trim().is_empty()) {
+        Some(value) => value.to_string(),
+        None => get_setting_str(state, "api_base_url")
+            .await
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "http://192.168.0.123:3000/v1".into()),
+    };
+    let model = get_setting_str(state, "embedding_model")
+        .await
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "Qwen/Qwen3-Embedding-8B".into());
+    let client = ripple_rag::EmbeddingClient::with_client(
+        state.http_client.clone(),
+        &base_url,
+        api_key,
+        &model,
+    );
     let emb = match tokio::time::timeout(Duration::from_secs(15), client.embed(content)).await {
         Ok(Ok(e)) => e,
-        Ok(Err(e)) => { tracing::warn!(error = %e, "inject_knowledge embed failed, skipping"); return None; }
-        Err(_) => { tracing::warn!("inject_knowledge embed timeout 15s, skipping"); return None; }
+        Ok(Err(_)) => {
+            tracing::warn!(failure_kind = "provider", "knowledge injection skipped");
+            return None;
+        }
+        Err(_) => {
+            tracing::warn!(failure_kind = "timeout", "knowledge injection skipped");
+            return None;
+        }
     };
 
     // 重新获取连接做检索
-    let conn = state.db.get_timeout(std::time::Duration::from_secs(5)).ok()?;
+    let conn = state
+        .db
+        .get_timeout(std::time::Duration::from_secs(5))
+        .ok()?;
     let mut results = Vec::new();
     for (kb_id, kb_name) in &kb_ids {
-        if let Ok(search_results) = ripple_rag::store::hybrid_search(&conn, &emb, content, Some(kb_id), 3) {
+        if let Ok(search_results) =
+            ripple_rag::store::hybrid_search(&conn, &emb, content, Some(kb_id), 3)
+        {
             for r in search_results {
                 results.push(format!("[KB: {}] {}", kb_name, r.content));
             }
         }
     }
-    if results.is_empty() { None } else { Some(results.join("\n---\n")) }
+    if results.is_empty() {
+        None
+    } else {
+        Some(results.join("\n---\n"))
+    }
 }
 
 /// 从 settings 表读取配置
 async fn get_setting_str(state: &State<'_, AppState>, key: &str) -> Option<String> {
     let conn = state.db.get_timeout(Duration::from_secs(3)).ok()?;
-    conn.query_row("SELECT value FROM settings WHERE key=?1", [key], |r| r.get::<_, String>(0)).ok()
+    conn.query_row("SELECT value FROM settings WHERE key=?1", [key], |r| {
+        r.get::<_, String>(0)
+    })
+    .ok()
 }
 
 async fn get_setting_bool(state: &State<'_, AppState>, key: &str) -> Option<bool> {
-    get_setting_str(state, key).await.and_then(|v| match v.as_str() { "true" | "1" => Some(true), "false" | "0" => Some(false), _ => None })
+    get_setting_str(state, key)
+        .await
+        .and_then(|v| match v.as_str() {
+            "true" | "1" => Some(true),
+            "false" | "0" => Some(false),
+            _ => None,
+        })
 }
 
 async fn get_setting_int(state: &State<'_, AppState>, key: &str) -> Option<i64> {
-    get_setting_str(state, key).await.and_then(|v| v.parse::<i64>().ok())
+    get_setting_str(state, key)
+        .await
+        .and_then(|v| v.parse::<i64>().ok())
 }
 
 /// 解析系统提示中的 {键名} 占位符。
@@ -854,12 +1352,19 @@ async fn get_setting_int(state: &State<'_, AppState>, key: &str) -> Option<i64> 
 /// 获取项目根目录（从 current_exe 上溯）
 fn project_root() -> std::path::PathBuf {
     std::env::current_exe()
-        .ok().and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         .map(|mut d| {
-            if d.ends_with("debug") || d.ends_with("release") { d.pop(); d.pop(); }
-            if d.file_name().and_then(|s| s.to_str()) == Some("src-tauri") { d.pop(); }
+            if d.ends_with("debug") || d.ends_with("release") {
+                d.pop();
+                d.pop();
+            }
+            if d.file_name().and_then(|s| s.to_str()) == Some("src-tauri") {
+                d.pop();
+            }
             d
-        }).unwrap_or_else(|| std::path::PathBuf::from("."))
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
 fn resolve_agent_placeholders(
@@ -868,12 +1373,19 @@ fn resolve_agent_placeholders(
 ) -> String {
     // 定位 Agents 目录
     let agents_dir = std::env::current_exe()
-        .ok().and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         .map(|mut d| {
-            if d.ends_with("debug") || d.ends_with("release") { d.pop(); d.pop(); }
-            if d.file_name().and_then(|s| s.to_str()) == Some("src-tauri") { d.pop(); }
+            if d.ends_with("debug") || d.ends_with("release") {
+                d.pop();
+                d.pop();
+            }
+            if d.file_name().and_then(|s| s.to_str()) == Some("src-tauri") {
+                d.pop();
+            }
             d.join("Agents")
-        }).unwrap_or_else(|| std::path::PathBuf::from("./Agents"));
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("./Agents"));
 
     // 加载 Agents/agent_map.json 映射
     let map_path = agents_dir.join("agent_map.json");
@@ -904,10 +1416,13 @@ fn resolve_agent_placeholders(
                 if let Some(stem) = map.get(&key).or_else(|| map.get(&key.to_lowercase())) {
                     let file_path = agents_dir.join(format!("{stem}.txt"));
                     match std::fs::read_to_string(&file_path) {
-                        Ok(content) => { result = result.replace(&placeholder, content.trim()); }
+                        Ok(content) => {
+                            result = result.replace(&placeholder, content.trim());
+                        }
                         Err(_) => {
                             tracing::warn!(file = %file_path.display(), "agent txt file not found");
-                            result = result.replace(&placeholder, &format!("[file missing: {stem}.txt]"));
+                            result = result
+                                .replace(&placeholder, &format!("[file missing: {stem}.txt]"));
                         }
                     }
                 } else {

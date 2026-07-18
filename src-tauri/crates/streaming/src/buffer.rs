@@ -115,7 +115,7 @@ mod tests {
         // 未达阈值，不 flush
         assert_eq!(buf.push("hi"), None);
         assert_eq!(buf.push("there"), None); // 7 chars
-        // 达到 10 chars
+                                             // 达到 10 chars
         assert_eq!(buf.push("!!!!"), Some("hithere!!!!".to_string()));
         assert!(buf.is_empty());
     }

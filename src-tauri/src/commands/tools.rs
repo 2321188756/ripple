@@ -93,7 +93,8 @@ fn calculator_tool() -> ToolDefinition {
 
 /// 执行计算器工具
 pub fn exec_calculator(args: &serde_json::Value) -> Result<String, String> {
-    let expr = args.get("expression")
+    let expr = args
+        .get("expression")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "missing 'expression' argument".to_string())?;
 
@@ -108,7 +109,10 @@ fn eval_math(expr: &str) -> Result<String, String> {
     let mut pos = 0;
     let result = parse_expr(&chars, &mut pos)?;
     if pos < chars.len() {
-        return Err(format!("unexpected character '{}' at position {}", chars[pos], pos));
+        return Err(format!(
+            "unexpected character '{}' at position {}",
+            chars[pos], pos
+        ));
     }
     Ok(format_num(result))
 }
@@ -117,8 +121,14 @@ fn parse_expr(chars: &[char], pos: &mut usize) -> Result<f64, String> {
     let mut left = parse_term(chars, pos)?;
     while *pos < chars.len() {
         match chars[*pos] {
-            '+' => { *pos += 1; left += parse_term(chars, pos)?; }
-            '-' => { *pos += 1; left -= parse_term(chars, pos)?; }
+            '+' => {
+                *pos += 1;
+                left += parse_term(chars, pos)?;
+            }
+            '-' => {
+                *pos += 1;
+                left -= parse_term(chars, pos)?;
+            }
             _ => break,
         }
     }
@@ -129,17 +139,24 @@ fn parse_term(chars: &[char], pos: &mut usize) -> Result<f64, String> {
     let mut left = parse_power(chars, pos)?;
     while *pos < chars.len() {
         match chars[*pos] {
-            '*' => { *pos += 1; left *= parse_power(chars, pos)?; }
+            '*' => {
+                *pos += 1;
+                left *= parse_power(chars, pos)?;
+            }
             '/' => {
                 *pos += 1;
                 let right = parse_power(chars, pos)?;
-                if right == 0.0 { return Err("division by zero".into()); }
+                if right == 0.0 {
+                    return Err("division by zero".into());
+                }
                 left /= right;
             }
             '%' => {
                 *pos += 1;
                 let right = parse_power(chars, pos)?;
-                if right == 0.0 { return Err("modulo by zero".into()); }
+                if right == 0.0 {
+                    return Err("modulo by zero".into());
+                }
                 left %= right;
             }
             _ => break,
@@ -152,7 +169,7 @@ fn parse_power(chars: &[char], pos: &mut usize) -> Result<f64, String> {
     let mut left = parse_unary(chars, pos)?;
     if *pos < chars.len() && chars[*pos] == '^' {
         *pos += 1;
-        let right = parse_power(chars, pos)?;  // 右结合
+        let right = parse_power(chars, pos)?; // 右结合
         left = left.powf(right);
     }
     Ok(left)
@@ -163,8 +180,14 @@ fn parse_unary(chars: &[char], pos: &mut usize) -> Result<f64, String> {
         return Err("unexpected end of expression".into());
     }
     match chars[*pos] {
-        '+' => { *pos += 1; parse_primary(chars, pos) }
-        '-' => { *pos += 1; Ok(-parse_primary(chars, pos)?) }
+        '+' => {
+            *pos += 1;
+            parse_primary(chars, pos)
+        }
+        '-' => {
+            *pos += 1;
+            Ok(-parse_primary(chars, pos)?)
+        }
         _ => parse_primary(chars, pos),
     }
 }
@@ -175,7 +198,9 @@ fn parse_primary(chars: &[char], pos: &mut usize) -> Result<f64, String> {
     }
 
     // 函数调用
-    let funcs = ["sqrt", "sin", "cos", "tan", "log", "ln", "abs", "ceil", "floor", "round"];
+    let funcs = [
+        "sqrt", "sin", "cos", "tan", "log", "ln", "abs", "ceil", "floor", "round",
+    ];
     for &f in &funcs {
         let fc: Vec<char> = f.chars().collect();
         if chars[*pos..].starts_with(&fc) {
@@ -206,8 +231,11 @@ fn parse_primary(chars: &[char], pos: &mut usize) -> Result<f64, String> {
     }
 
     // 常量
-    if chars[*pos..].len() >= 2 && chars[*pos] == 'p' && chars[*pos + 1] == 'i'
-        && (*pos + 2 >= chars.len() || !chars[*pos + 2].is_alphanumeric()) {
+    if chars[*pos..].len() >= 2
+        && chars[*pos] == 'p'
+        && chars[*pos + 1] == 'i'
+        && (*pos + 2 >= chars.len() || !chars[*pos + 2].is_alphanumeric())
+    {
         *pos += 2;
         return Ok(std::f64::consts::PI);
     }
@@ -237,15 +265,23 @@ fn parse_number(chars: &[char], pos: &mut usize) -> Result<f64, String> {
         *pos += 1;
     }
     if *pos == start {
-        return Err(format!("expected number at position {start}, got '{:?}'", chars.get(start)));
+        return Err(format!(
+            "expected number at position {start}, got '{:?}'",
+            chars.get(start)
+        ));
     }
     let s: String = chars[start..*pos].iter().collect();
-    s.parse::<f64>().map_err(|e| format!("invalid number '{s}': {e}"))
+    s.parse::<f64>()
+        .map_err(|e| format!("invalid number '{s}': {e}"))
 }
 
 fn format_num(v: f64) -> String {
-    if v.is_infinite() { return "Infinity".into(); }
-    if v.is_nan() { return "NaN".into(); }
+    if v.is_infinite() {
+        return "Infinity".into();
+    }
+    if v.is_nan() {
+        return "NaN".into();
+    }
     let s = format!("{:.10}", v);
     let s = s.trim_end_matches('0').trim_end_matches('.');
     s.to_string()
@@ -274,7 +310,9 @@ mod tests {
     fn functions_and_constants() {
         assert!((eval_math("sqrt(16)").unwrap().parse::<f64>().unwrap() - 4.0).abs() < 1e-6);
         assert!((eval_math("sin(0)").unwrap().parse::<f64>().unwrap() - 0.0).abs() < 1e-6);
-        assert!((eval_math("pi").unwrap().parse::<f64>().unwrap() - std::f64::consts::PI).abs() < 1e-6);
+        assert!(
+            (eval_math("pi").unwrap().parse::<f64>().unwrap() - std::f64::consts::PI).abs() < 1e-6
+        );
     }
 
     #[test]
@@ -309,7 +347,15 @@ fn get_time_info_tool() -> ToolDefinition {
 pub fn exec_get_time_info(_args: &serde_json::Value) -> Result<String, String> {
     use chrono::Local;
     let now = Local::now();
-    let weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"];
+    let weekdays = [
+        "星期一",
+        "星期二",
+        "星期三",
+        "星期四",
+        "星期五",
+        "星期六",
+        "星期日",
+    ];
     let wd = weekdays[now.format("%w").to_string().parse::<usize>().unwrap_or(1)];
     Ok(format!(
         "当前时间：{}\n当前日期：{}年{}月{}日 {}\n时区：UTC{}\n时间戳：{}",
@@ -328,7 +374,8 @@ pub fn exec_get_time_info(_args: &serde_json::Value) -> Result<String, String> {
 fn get_weather_tool() -> ToolDefinition {
     ToolDefinition {
         name: "get_weather".into(),
-        description: "查询城市当前天气。参数 city：城市名，如 Beijing / London / Tokyo / 上海".into(),
+        description: "查询城市当前天气。参数 city：城市名，如 Beijing / London / Tokyo / 上海"
+            .into(),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
@@ -345,11 +392,15 @@ fn get_weather_tool() -> ToolDefinition {
 }
 
 pub async fn exec_get_weather(args: &serde_json::Value) -> Result<String, String> {
-    let city = args.get("city")
+    let city = args
+        .get("city")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "missing 'city' argument".to_string())?;
 
-    let url = format!("https://wttr.in/{}?format=%C+|+%t+|+Humidity:%h+|+Wind:%w&lang=zh", urlencoding(city));
+    let url = format!(
+        "https://wttr.in/{}?format=%C+|+%t+|+Humidity:%h+|+Wind:%w&lang=zh",
+        urlencoding(city)
+    );
     let resp = reqwest::get(&url)
         .await
         .map_err(|e| format!("weather request failed: {e}"))?

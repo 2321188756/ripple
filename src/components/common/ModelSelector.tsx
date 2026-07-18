@@ -13,10 +13,11 @@ interface ModelSelectorProps {
   value: string;
   onChange: (model: string) => void;
   disabled?: boolean;
+  id?: string;
 }
 
 /** 模型下拉选择器：动态从 newapi /v1/models 拉取，失败回退到内置列表。 */
-export function ModelSelector({ value, onChange, disabled }: ModelSelectorProps) {
+export function ModelSelector({ value, onChange, disabled, id }: ModelSelectorProps) {
   const [models, setModels] = useState<{ value: string; label: string }[]>(
     () => MODELS.map((m) => ({ value: m.value, label: m.label }))
   );
@@ -41,7 +42,7 @@ export function ModelSelector({ value, onChange, disabled }: ModelSelectorProps)
 
   return (
     <Select value={value} onValueChange={onChange} disabled={disabled}>
-      <SelectTrigger className="h-7 w-48 text-xs">
+      <SelectTrigger id={id} className="h-7 w-48 text-xs">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

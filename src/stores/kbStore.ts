@@ -45,7 +45,6 @@ export const useKBStore = create<KBState>((set, get) => ({
     await kbService.importDoc({
       kbId,
       filePath,
-      apiKey: s.apiKey,
       apiBaseUrl: s.apiBaseUrl,
     });
     await get().loadDocs(kbId);

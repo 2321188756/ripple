@@ -11,7 +11,13 @@ interface ImageItem {
   id: string;
   dataUrl: string;
   name: string;
+  size: number;
 }
+
+const MAX_IMAGE_COUNT = 4;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024;
+const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
 interface ChatInputAreaProps {
   streaming: boolean;
@@ -23,6 +29,7 @@ interface ChatInputAreaProps {
 export function ChatInputArea({ streaming, onSend, onStop }: ChatInputAreaProps) {
   const [input, setInput] = useState("");
   const [images, setImages] = useState<ImageItem[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const openPreview = useCallback((url: string) => {
     window.dispatchEvent(new CustomEvent("ripple:preview-image", { detail: { url } }));
   }, []);
@@ -44,12 +51,42 @@ export function ChatInputArea({ streaming, onSend, onStop }: ChatInputAreaProps)
   }, [input]);
 
   const readFile = useCallback((file: File) => {
-    if (!file.type.startsWith("image/")) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      setImages((prev) => [...prev, { id: crypto.randomUUID(), dataUrl: reader.result as string, name: file.name || "image" }]);
-    };
-    reader.readAsDataURL(file);
+    setAttachmentError(null);
+    if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+      setAttachmentError("仅支持 PNG、JPEG、WebP 和 GIF 图片。");
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      setAttachmentError("单张图片不能超过 5 MB。");
+      return;
+    }
+    setImages((current) => {
+      if (current.length >= MAX_IMAGE_COUNT) {
+        setAttachmentError(`最多添加 ${MAX_IMAGE_COUNT} 张图片。`);
+        return current;
+      }
+      if (current.reduce((sum, image) => sum + image.size, 0) + file.size > MAX_TOTAL_IMAGE_BYTES) {
+        setAttachmentError("图片总大小不能超过 12 MB。");
+        return current;
+      }
+      if (current.some((image) => image.name === file.name && image.size === file.size)) {
+        setAttachmentError("这张图片已添加。");
+        return current;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result !== "string") return;
+        setImages((latest) => [...latest, {
+          id: crypto.randomUUID(),
+          dataUrl: reader.result as string,
+          name: file.name || "image",
+          size: file.size,
+        }]);
+      };
+      reader.onerror = () => setAttachmentError(`无法读取图片：${file.name || "image"}`);
+      reader.readAsDataURL(file);
+      return current;
+    });
   }, []);
 
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
@@ -154,6 +191,10 @@ export function ChatInputArea({ streaming, onSend, onStop }: ChatInputAreaProps)
                 </div>
               ))}
             </div>
+          )}
+
+          {attachmentError && (
+            <p role="alert" className="text-xs text-destructive">{attachmentError}</p>
           )}
 
           {/* 输入区 */}

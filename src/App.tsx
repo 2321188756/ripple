@@ -97,13 +97,6 @@ function App() {
     }
   }, [selectedAgent?.id, toggleAgentMode]);
 
-  // 禁用浏览器默认右键菜单
-  useEffect(() => {
-    const handler = (e: MouseEvent) => e.preventDefault();
-    document.addEventListener("contextmenu", handler);
-    return () => document.removeEventListener("contextmenu", handler);
-  }, []);
-
   // 文件拖放：阻止浏览器默认行为
   useEffect(() => {
     const preventNav = (e: DragEvent) => { if (e.dataTransfer?.types.includes("Files")) { e.preventDefault(); } };
@@ -178,7 +171,7 @@ function App() {
           </SheetContent>
         </Sheet>
 
-        <main role="main" className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <main role="main" className="bg-content-wash flex min-w-0 flex-1 flex-col overflow-hidden">
           <ChatHeader
             activeId={activeId}
             hasMessages={hasMessages}

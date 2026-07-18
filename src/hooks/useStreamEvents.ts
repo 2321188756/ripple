@@ -5,6 +5,7 @@ import type {
   StreamChunkPayload,
   GenCompletePayload,
   GenErrorPayload,
+  ToolCallEvent,
   ApprovalRequestEvent,
 } from "@/types";
 
@@ -23,7 +24,10 @@ export function useStreamEvents() {
     const un3 = listen<GenErrorPayload>("chat:gen-error", (e) =>
       useChatStore.getState().handleStreamError(e.payload),
     );
-    const un4 = listen<ApprovalRequestEvent>("chat:tool-approval-request", (e) => {
+    const un4 = listen<ToolCallEvent>("chat:tool-call", (e) =>
+      useChatStore.getState().appendToolEvent(e.payload),
+    );
+    const un5 = listen<ApprovalRequestEvent>("chat:tool-approval-request", (e) => {
       useChatStore.getState().addApprovalRequest(e.payload);
     });
 
@@ -32,6 +36,7 @@ export function useStreamEvents() {
       un2.then((f) => f());
       un3.then((f) => f());
       un4.then((f) => f());
+      un5.then((f) => f());
     };
   }, []);
 }

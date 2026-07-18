@@ -2,10 +2,14 @@
 
 use ripple_core::{ChatMessage, ChatRequest, ContentBlock};
 use ripple_model_provider::{ModelProvider, OpenAiProvider};
+use tauri::State;
+
+use crate::state::AppState;
 
 /// 测试命令：直接调用 newapi，不经过数据库
 #[tauri::command]
-pub async fn test_chat(api_key: String) -> Result<String, String> {
+pub async fn test_chat(state: State<'_, AppState>) -> Result<String, String> {
+    let api_key = crate::commands::settings::load_api_key(&state)?;
     tracing::info!("test_chat: starting direct API call");
 
     let provider = OpenAiProvider::new_dynamic("newapi", "newapi", "http://192.168.0.123:3000/v1");
@@ -25,13 +29,15 @@ pub async fn test_chat(api_key: String) -> Result<String, String> {
 
     match provider.chat(&api_key, request).await {
         Ok(response) => {
-            let text: String = response.content.iter()
+            let text: String = response
+                .content
+                .iter()
                 .filter_map(|b| match b {
                     ContentBlock::Text { text } => Some(text.as_str()),
                     _ => None,
                 })
                 .collect();
-            tracing::info!(%text, "test_chat: got response");
+            tracing::info!(response_chars = text.chars().count(), "test_chat completed");
             Ok(text)
         }
         Err(e) => {

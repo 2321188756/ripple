@@ -10,7 +10,8 @@ export function EmptyChatPlaceholder() {
       {/* Logo / Agent 图标 */}
       <div className="relative">
         <div
-          className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary to-primary-600 flex items-center justify-center shadow-lg shadow-primary/20 text-3xl overflow-hidden"
+          className="w-16 h-16 rounded-2xl flex items-center justify-center shadow-lg shadow-primary/20 text-3xl overflow-hidden"
+          style={{ backgroundImage: "linear-gradient(to bottom right, hsl(var(--gradient-from)), hsl(var(--gradient-via)), hsl(var(--gradient-to)))" }}
         >
           {selectedAgent?.icon ? (
             selectedAgent.icon.startsWith("data:image") ? (

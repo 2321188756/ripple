@@ -1,0 +1,17 @@
+# Explicit opt-in fixture for Knowledge Service integration tests only.
+# It has no project data mount and is destroyed by test-auth-acl.ps1.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ripple_knowledge_test
+      POSTGRES_USER: ripple_test
+      POSTGRES_PASSWORD: ripple_test_only
+    ports:
+      - "${RIPPLE_KNOWLEDGE_TEST_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ripple_test -d ripple_knowledge_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s

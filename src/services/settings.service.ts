@@ -5,6 +5,10 @@ export const settingsService = {
     invoke<string | null>("get_setting", { key }),
   set: (key: string, value: string): Promise<void> =>
     invoke<void>("set_setting", { key, value }),
+  saveApiKey: (apiKey: string): Promise<void> =>
+    invoke<void>("save_api_key", { apiKey }),
+  hasApiKey: (): Promise<boolean> => invoke<boolean>("has_api_key"),
+  clearApiKey: (): Promise<void> => invoke<void>("clear_api_key"),
   setDebugLogging: (enabled: boolean): Promise<void> =>
     invoke<void>("set_debug_logging", { enabled }),
   getDebugLogging: (): Promise<boolean> =>

@@ -13,7 +13,7 @@ import { CONTEXT_DEFAULTS } from "@/lib/constants";
 
 export function GeneralSettings() {
   const s = useSettingsStore();
-  const [localKey, setLocalKey] = useState(s.apiKey);
+  const [localKey, setLocalKey] = useState("");
   const [localUrl, setLocalUrl] = useState(s.apiBaseUrl);
   const [localModel, setLocalModel] = useState(s.defaultModel);
   const [localLlmModel, setLocalLlmModel] = useState(s.llmModel);
@@ -63,7 +63,10 @@ export function GeneralSettings() {
   };
 
   const saveAll = async () => {
-    await s.setApiKey(localKey);
+    if (localKey.trim()) {
+      await s.saveApiKey(localKey);
+      setLocalKey("");
+    }
     await s.setApiBaseUrl(localUrl);
     await s.setDefaultModel(localModel);
     await s.setLlmModel(localLlmModel);
@@ -78,7 +81,7 @@ export function GeneralSettings() {
   const testApi = async () => {
     setTesting(true); setTestResult(null);
     try {
-      const res = await systemService.testChat(localKey);
+      const res = await systemService.testChat();
       setTestResult({ ok: true, msg: `OK: ${res}` });
     } catch (e) { setTestResult({ ok: false, msg: `失败: ${e}` }); }
     setTesting(false);
@@ -94,6 +97,7 @@ export function GeneralSettings() {
           <Label className="text-xs text-muted-foreground">API Key</Label>
           <div className="relative">
             <Input type={showKey ? "text" : "password"} value={localKey}
+              placeholder={s.hasApiKey ? "已配置；输入新密钥以替换" : "输入 API Key"}
               onChange={(e) => { setLocalKey(e.target.value); markDirty(); }}
               className="pr-9 text-xs font-mono" />
             <button type="button" onClick={() => setShowKey(!showKey)}

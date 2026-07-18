@@ -1,0 +1,19 @@
+[package]
+name = "ripple-knowledge-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+argon2 = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+ripple-knowledge-domain = { workspace = true }
+ripple-knowledge-ingest = { workspace = true }
+sha2 = { workspace = true }
+sqlx = { workspace = true }
+subtle = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }

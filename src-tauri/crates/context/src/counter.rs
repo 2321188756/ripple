@@ -19,7 +19,9 @@ pub trait TokenCounter: Send + Sync {
                 ContentBlock::Text { text } => n += self.count_text(text),
                 // 图片按 OpenAI vision 经验值估算（低细节 ~85，高细节 ~170），取 85
                 ContentBlock::Image { .. } => n += 85,
-                ContentBlock::ToolCall { name, arguments, .. } => {
+                ContentBlock::ToolCall {
+                    name, arguments, ..
+                } => {
                     n += self.count_text(name);
                     n += self.count_text(&arguments.to_string());
                 }
@@ -39,7 +41,7 @@ impl TokenCounter for CharApproxCounter {
     fn count_text(&self, text: &str) -> usize {
         // 用 chars().count() 而非 len()，使 CJK 字符算 1 而非 3 字节
         let chars = text.chars().count();
-        (chars + 3) / 4 // 向上取整
+        chars.div_ceil(4) // 向上取整
     }
 }
 

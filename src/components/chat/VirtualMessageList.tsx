@@ -26,6 +26,8 @@ export const VirtualMessageList = memo(function VirtualMessageList({
   // 不再经 App 向下传导导致 Sidebar/ChatHeader/ChatInputArea 全树重渲染。
   const messages = useChatStore((s) => (s.activeId ? s.messages[s.activeId] : undefined)) ?? [];
   const streamingText = useChatStore((s) => s.streamingText);
+  const activeId = useChatStore((s) => s.activeId);
+  const paging = useChatStore((s) => (s.activeId ? s.messagePaging[s.activeId] : undefined));
 
   // 右键菜单
   const [ctxPos, setCtxPos] = useState<{ x: number; y: number } | null>(null);
@@ -126,18 +128,32 @@ export const VirtualMessageList = memo(function VirtualMessageList({
   }
 
   return (
-    <div className="relative flex min-h-0 flex-1">
+    <div className="bg-content-wash relative flex min-h-0 flex-1">
       <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto"
         onScroll={() => {
           const el = scrollRef.current;
           if (!el) return;
+          if (el.scrollTop < 120 && activeId && paging?.hasOlder && !paging.loadingOlder) {
+            const previousHeight = el.scrollHeight;
+            void useChatStore.getState().loadOlderMessages(activeId).then(() => {
+              requestAnimationFrame(() => {
+                const current = scrollRef.current;
+                if (current) current.scrollTop += current.scrollHeight - previousHeight;
+              });
+            });
+          }
           const next = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
           setAutoScroll((prev) => (prev === next ? prev : next));
         }}
       >
         <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+          {paging?.loadingOlder && (
+            <div role="status" className="absolute left-0 right-0 top-1 z-10 text-center text-xs text-muted-foreground">
+              正在加载更早消息…
+            </div>
+          )}
           {virtualizer.getVirtualItems().map((vItem) => {
             const item = items[vItem.index];
             return (

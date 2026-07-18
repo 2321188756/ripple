@@ -10,6 +10,7 @@ import type {
   StreamChunkPayload,
   GenCompletePayload,
   GenErrorPayload,
+  ToolCallEvent,
   ApprovalRequestEvent,
 } from "@/types";
 
@@ -21,13 +22,25 @@ type LastRequest =
   | { type: "regenerate"; messageId: string; conversationId: string }
   | null;
 
+interface MessagePagingState {
+  hasOlder: boolean;
+  loadingOlder: boolean;
+  error: string | null;
+}
+
 interface ChatState {
   conversations: Conversation[];
   activeId: string | null;
   messages: Record<string, Message[]>;
+  messagePaging: Record<string, MessagePagingState>;
+  loadingConversationId: string | null;
   agentMode: boolean;
   streamingText: string | null;
   streamingMsgId: string | null;
+  streamingStreamId: string | null;
+  streamingConversationId: string | null;
+  streamingSeq: number;
+  streamingBlocks: ContentBlock[];
   loading: boolean;
   error: string | null;
   /** 记住每个 Agent 上次活跃的会话 */
@@ -47,6 +60,7 @@ interface ChatState {
   loadConversations: (agentId?: string) => Promise<void>;
   createConversation: (agentId?: string) => Promise<string>;
   switchConversation: (id: string, agentId?: string) => Promise<void>;
+  loadOlderMessages: (conversationId?: string) => Promise<void>;
   /** 选中 Agent 后恢复其上次活跃会话，没有则选最新 */
   restoreLastActive: (agentId: string) => Promise<void>;
   sendMessage: (content: string, images?: string[]) => Promise<void>;
@@ -60,6 +74,7 @@ interface ChatState {
   /** 删除消息及其后所有消息 */
   deleteMessage: (messageId: string, conversationId?: string) => Promise<void>;
   appendToStreaming: (chunk: StreamChunkPayload) => void;
+  appendToolEvent: (event: ToolCallEvent) => void;
   finalizeStreaming: (payload: GenCompletePayload) => void;
   /** 流式出错：保留已生成部分为助手消息，清流并设置错误 */
   handleStreamError: (payload: GenErrorPayload) => void;
@@ -70,9 +85,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
   conversations: [],
   activeId: null,
   messages: {},
+  messagePaging: {},
+  loadingConversationId: null,
   agentMode: false,
   streamingText: null,
   streamingMsgId: null,
+  streamingStreamId: null,
+  streamingConversationId: null,
+  streamingSeq: 0,
+  streamingBlocks: [],
   loading: false,
   error: null,
   lastActivePerAgent: {},
@@ -80,10 +101,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   pendingApprovals: [],
 
   loadConversations: async (agentId?: string) => {
-    const convos = await conversationService
-      .list(agentId ? { agentId } : {})
-      .catch(() => []);
-    set({ conversations: convos });
+    try {
+      const convos = await conversationService.list(agentId ? { agentId } : {});
+      set({ conversations: convos });
+    } catch (error) {
+      set({ error: `Failed to load conversations: ${String(error)}` });
+    }
   },
 
   createConversation: async (agentId?: string) => {
@@ -105,15 +128,68 @@ export const useChatStore = create<ChatState>((set, get) => ({
       await get().stopGeneration();
     }
 
-    // 先加载消息再切 activeId，避免右侧先闪空状态再出内容的闪烁。
-    // 加载期间右侧仍显示旧对话，加载完成后原子切换。
-    const msgs = await messageService.list(id).catch(() => []);
-    set({
-      activeId: id,
-      streamingText: null,
-      streamingMsgId: null,
-      messages: { ...get().messages, [id]: msgs },
-    });
+    set({ loadingConversationId: id });
+    try {
+      const msgs = await messageService.list(id);
+      if (get().loadingConversationId !== id) return;
+      set((s) => ({
+        activeId: id,
+        loadingConversationId: null,
+        streamingText: null,
+        streamingMsgId: null,
+        streamingStreamId: null,
+        streamingConversationId: null,
+        streamingSeq: 0,
+        streamingBlocks: [],
+        messages: { ...s.messages, [id]: msgs },
+        messagePaging: {
+          ...s.messagePaging,
+          [id]: { hasOlder: msgs.length === 50, loadingOlder: false, error: null },
+        },
+      }));
+    } catch (error) {
+      if (get().loadingConversationId === id) {
+        set({ loadingConversationId: null, error: `Failed to load messages: ${String(error)}` });
+      }
+    }
+  },
+
+  loadOlderMessages: async (conversationId?: string) => {
+    const cid = conversationId ?? get().activeId;
+    if (!cid) return;
+    const state = get();
+    const paging = state.messagePaging[cid];
+    const existing = state.messages[cid] ?? [];
+    if (paging?.loadingOlder || paging?.hasOlder === false || existing.length === 0) return;
+    set((s) => ({
+      messagePaging: {
+        ...s.messagePaging,
+        [cid]: { hasOlder: true, loadingOlder: true, error: null },
+      },
+    }));
+    try {
+      const page = await messageService.list(cid, { limit: 50, beforeId: existing[0].id });
+      set((s) => {
+        const current = s.messages[cid] ?? [];
+        const seen = new Set(current.map((message) => message.id));
+        const prepend = page.filter((message) => !seen.has(message.id));
+        return {
+          messages: { ...s.messages, [cid]: [...prepend, ...current] },
+          messagePaging: {
+            ...s.messagePaging,
+            [cid]: { hasOlder: page.length === 50, loadingOlder: false, error: null },
+          },
+        };
+      });
+    } catch (error) {
+      set((s) => ({
+        messagePaging: {
+          ...s.messagePaging,
+          [cid]: { hasOlder: true, loadingOlder: false, error: String(error) },
+        },
+        error: `Failed to load older messages: ${String(error)}`,
+      }));
+    }
   },
 
   restoreLastActive: async (agentId: string) => {
@@ -145,21 +221,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sendMessage: async (content: string, images?: string[]) => {
     const state = get();
     if (state.streamingText !== null) {
-      await logService.log("warn", "sendMessage: already streaming, ignored");
+      await logService.log({ event: "chat_send_ignored" });
       return;
     }
-    await logService.log("info", `sendMessage called: activeId=${state.activeId}`);
     let aid = state.activeId;
     if (!aid) {
-      await logService.log("info", "sendMessage: no active conversation, creating one for current agent");
+      await logService.log({ event: "chat_conversation_creating" });
       try {
         // 用当前选中 Agent 建会话，使会话归属该 Agent（元数据带 agent_id），切回时能恢复
         const agentId = useAgentStore.getState().selectedAgent?.id;
         const id = await state.createConversation(agentId);
         await state.switchConversation(id, agentId);
         aid = id;
-      } catch (e) {
-        await logService.log("error", `sendMessage: auto-create conversation failed: ${e}`);
+      } catch {
+        await logService.log({ event: "chat_conversation_create_failed" });
         set({ error: "Failed to create conversation." });
         return;
       }
@@ -190,10 +265,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       lastRequest: { type: "send", content, images: images && images.length > 0 ? images : undefined, userMsgId: userMsg.id, conversationId: aid },
     }));
 
-    await logService.log("info", `send_message: conv=${aid} len=${content.length}`);
+    await logService.log({ event: "chat_send_started", conversationId: aid, contentChars: content.length });
     // 先标记流式开始（streamingText="" 非 null），使 await 期间到达的首块能被
     // appendToStreaming 锁存 message_id，避免快模型/本地模型开头丢字。
-    set({ streamingText: "", streamingMsgId: null });
+    set({ streamingText: "", streamingMsgId: null, streamingStreamId: null, streamingConversationId: aid, streamingSeq: 0, streamingBlocks: [] });
     try {
       const s = useSettingsStore.getState();
       const agentMode = get().agentMode;
@@ -202,7 +277,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         conversationId: aid,
         content,
         images: images && images.length > 0 ? images : undefined,
-        apiKey: s.apiKey,
         apiBaseUrl: s.apiBaseUrl,
         model: s.defaultModel,
         agentMode,
@@ -211,72 +285,95 @@ export const useChatStore = create<ChatState>((set, get) => ({
         topP: agent?.top_p,
         userMessageId: userMsg.id,
       });
-      await logService.log("info", `send_message ok: msgId=${msgId}`);
+      await logService.log({ event: "chat_send_succeeded", messageId: msgId });
       // 补设 msgId；若首块已锁存则同值，且不覆盖已累积的 streamingText
       set((st) => ({ streamingMsgId: msgId, streamingText: st.streamingText ?? "" }));
     } catch (err) {
       const msg = typeof err === "string" ? err : "send_message failed";
-      await logService.log("error", `send_message error: ${msg}`);
+      await logService.log({ event: "chat_send_failed" });
       set({ error: msg, streamingText: null, streamingMsgId: null });
     }
   },
 
   stopGeneration: async () => {
-    const { activeId, streamingText, streamingMsgId } = get();
+    const { activeId } = get();
     if (!activeId) return;
-    await chatService.stop(activeId).catch(() => {});
-    // 保留已生成的部分文本为助手消息（不再直接丢弃），与后端落库的部分回复同 id。
-    // 后端 stop 后会发 gen-complete，但此时 streamingMsgId 已清空，finalize 会 early-return，不会重复。
-    if (streamingMsgId && streamingText && streamingText.length > 0) {
-      const assistantMsg: Message = {
-        id: streamingMsgId,
-        conversation_id: activeId,
-        role: "assistant",
-        content: [{ type: "text", text: streamingText }],
-        created_at: new Date().toISOString(),
-        token_count: null,
-        metadata: {},
-      };
-      set((s) => ({
-        messages: { ...s.messages, [activeId]: [...(s.messages[activeId] || []), assistantMsg] },
-        streamingText: null,
-        streamingMsgId: null,
-      }));
-    } else {
-      set({ streamingText: null, streamingMsgId: null });
+    try {
+      await chatService.stop(activeId);
+    } catch (error) {
+      set({ error: `Failed to stop generation: ${String(error)}` });
     }
   },
 
   appendToStreaming: (chunk: StreamChunkPayload) => {
-    if (!chunk.delta_text) return;
+    if (chunk.contract_version !== 1) return;
     const s = get();
-    let msgId = s.streamingMsgId;
-    // 流式首块竞态：send/regenerate 的 await 期间首块可能先到，streamingMsgId 仍为 null。
-    // 用首块 message_id 锁存，避免开头丢字（streamingText==="" 表示流式已开始但 msgId 未就绪）。
-    if (msgId === null && s.streamingText === "") {
-      msgId = chunk.message_id;
-      set({ streamingMsgId: msgId });
-    }
-    if (msgId === chunk.message_id) {
-      set({ streamingText: (s.streamingText || "") + chunk.delta_text });
-    }
+    if (s.streamingText === null) return;
+    if (s.streamingConversationId && s.streamingConversationId !== chunk.conversation_id) return;
+    if (s.streamingStreamId && s.streamingStreamId !== chunk.stream_id) return;
+    if (s.streamingMsgId && s.streamingMsgId !== chunk.message_id) return;
+    if (s.streamingStreamId === chunk.stream_id && chunk.seq <= s.streamingSeq) return;
+
+    set({
+      streamingStreamId: chunk.stream_id,
+      streamingConversationId: chunk.conversation_id,
+      streamingMsgId: chunk.message_id,
+      streamingSeq: chunk.seq,
+      streamingText: chunk.delta_text ? s.streamingText + chunk.delta_text : s.streamingText,
+    });
+  },
+
+  appendToolEvent: (event: ToolCallEvent) => {
+    if (event.contract_version !== 1) return;
+    const s = get();
+    if (s.streamingText === null) return;
+    if (s.streamingConversationId && s.streamingConversationId !== event.conversation_id) return;
+    if (s.streamingStreamId && s.streamingStreamId !== event.stream_id) return;
+    if (s.streamingMsgId && s.streamingMsgId !== event.message_id) return;
+    if (s.streamingStreamId === event.stream_id && event.seq <= s.streamingSeq) return;
+    const toolCall: ContentBlock = {
+      type: "tool_call",
+      id: event.tool_call_id,
+      name: event.tool_name,
+      arguments: event.tool_input,
+    };
+    const toolResult: ContentBlock = {
+      type: "tool_result",
+      tool_call_id: event.tool_call_id,
+      content: event.tool_output,
+    };
+    const withoutCall = s.streamingBlocks.filter((block) =>
+      !(block.type === "tool_call" && block.id === event.tool_call_id) &&
+      !(block.type === "tool_result" && block.tool_call_id === event.tool_call_id),
+    );
+    set({
+      streamingStreamId: event.stream_id,
+      streamingConversationId: event.conversation_id,
+      streamingMsgId: event.message_id,
+      streamingSeq: event.seq,
+      streamingBlocks: [...withoutCall, toolCall, toolResult],
+    });
   },
 
   finalizeStreaming: (payload: GenCompletePayload) => {
-    const { streamingText, streamingMsgId } = get();
+    const { streamingText, streamingMsgId, streamingStreamId, streamingConversationId, streamingSeq, streamingBlocks } = get();
     if (!streamingMsgId || streamingText === null) return;
-    // 用事件携带的 conversation_id 落库，而非 activeId：流式期间用户切到别的对话时，
-    // 回复仍应落到原对话，切回即可见。
+    if (payload.contract_version !== 1 || payload.stream_id !== streamingStreamId ||
+        payload.message_id !== streamingMsgId || payload.conversation_id !== streamingConversationId ||
+        payload.seq <= streamingSeq) return;
     const cid = payload.conversation_id;
 
     const assistantMsg: Message = {
       id: streamingMsgId,
       conversation_id: cid,
       role: "assistant",
-      content: [{ type: "text", text: streamingText }],
+      content: [
+        ...(streamingText ? [{ type: "text" as const, text: streamingText }] : []),
+        ...streamingBlocks,
+      ],
       created_at: new Date().toISOString(),
       token_count: payload.usage.total_tokens,
-      metadata: {},
+      metadata: { completion_state: payload.outcome, finish_reason: payload.finish_reason },
     };
 
     set((s) => ({
@@ -286,11 +383,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
       },
       streamingText: null,
       streamingMsgId: null,
+      streamingStreamId: null,
+      streamingConversationId: null,
+      streamingSeq: 0,
+      streamingBlocks: [],
     }));
   },
 
   handleStreamError: (payload: GenErrorPayload) => {
-    const { streamingText, streamingMsgId } = get();
+    const { streamingText, streamingMsgId, streamingStreamId, streamingConversationId, streamingSeq, streamingBlocks } = get();
+    if (streamingText === null) return;
+    if (payload.contract_version !== 1 ||
+        (streamingStreamId !== null && payload.stream_id !== streamingStreamId) ||
+        (streamingMsgId !== null && payload.message_id !== streamingMsgId) ||
+        (streamingConversationId !== null && payload.conversation_id !== streamingConversationId) ||
+        payload.seq < streamingSeq) return;
     const cid = payload.conversation_id;
     // 保留已生成的部分文本为助手消息，避免流式中途报错时已生成内容凭空消失
     if (streamingMsgId && streamingText && streamingText.length > 0) {
@@ -298,24 +405,46 @@ export const useChatStore = create<ChatState>((set, get) => ({
         id: streamingMsgId,
         conversation_id: cid,
         role: "assistant",
-        content: [{ type: "text", text: streamingText }],
+        content: [
+          ...(streamingText ? [{ type: "text" as const, text: streamingText }] : []),
+          ...streamingBlocks,
+        ],
         created_at: new Date().toISOString(),
         token_count: null,
-        metadata: {},
+        metadata: { completion_state: "failed" },
       };
       set((s) => ({
         messages: { ...s.messages, [cid]: [...(s.messages[cid] || []), assistantMsg] },
         streamingText: null,
         streamingMsgId: null,
+        streamingStreamId: null,
+        streamingConversationId: null,
+        streamingSeq: 0,
+        streamingBlocks: [],
         error: payload.error,
       }));
     } else {
-      set({ streamingText: null, streamingMsgId: null, error: payload.error });
+      set({
+        streamingText: null,
+        streamingMsgId: null,
+        streamingStreamId: null,
+        streamingConversationId: null,
+        streamingSeq: 0,
+        streamingBlocks: [],
+        error: payload.error,
+      });
     }
   },
 
   clearStreaming: () => {
-    set({ streamingText: null, streamingMsgId: null });
+    set({
+      streamingText: null,
+      streamingMsgId: null,
+      streamingStreamId: null,
+      streamingConversationId: null,
+      streamingSeq: 0,
+      streamingBlocks: [],
+    });
   },
 
   regenerate: async (messageId: string, conversationId?: string) => {
@@ -324,9 +453,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!cid) { set({ error: "No active conversation" }); return; }
     if (state.streamingText !== null) return;
 
-    // 本地截断 messageId 之后的消息（含 messageId 本身）。
-    // 后端 delete_from 用 rowid > 只删后面的，保留选中消息本身。
-    // slice(0, idx + 1) 保留选中消息，仅去掉后面的。
+    const originalMessages = [...(state.messages[cid] || [])];
+    // 本地先反映截断；后端失败时从权威存储重新加载，避免历史永久消失。
     set((s) => {
       const msgs = s.messages[cid] || [];
       const idx = msgs.findIndex((m) => m.id === messageId);
@@ -344,7 +472,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const msgId = await chatService.regenerate({
         conversationId: cid,
         messageId,
-        apiKey: s.apiKey,
         apiBaseUrl: s.apiBaseUrl,
         model: s.defaultModel,
         agentMode: state.agentMode,
@@ -354,7 +481,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
       });
       set((st) => ({ streamingMsgId: msgId, streamingText: st.streamingText ?? "" }));
     } catch (err) {
-      set({ error: String(err), streamingText: null, streamingMsgId: null });
+      try {
+        const authoritative = await messageService.list(cid);
+        set((current) => ({
+          messages: { ...current.messages, [cid]: authoritative },
+          error: String(err),
+          streamingText: null,
+          streamingMsgId: null,
+          streamingStreamId: null,
+          streamingConversationId: null,
+          streamingSeq: 0,
+          streamingBlocks: [],
+        }));
+      } catch {
+        set((current) => ({
+          messages: { ...current.messages, [cid]: originalMessages },
+          error: String(err),
+          streamingText: null,
+          streamingMsgId: null,
+          streamingStreamId: null,
+          streamingConversationId: null,
+          streamingSeq: 0,
+          streamingBlocks: [],
+        }));
+      }
     }
   },
 

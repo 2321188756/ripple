@@ -9,8 +9,9 @@ interface StreamingMessageProps {
 export function StreamingMessage({ text }: StreamingMessageProps) {
   return (
     <div
-      role="log"
-      aria-live="polite"
+      role="status"
+      aria-live="off"
+      aria-label="助手正在回复"
       className="flex gap-2.5 px-4 py-1.5 justify-start"
     >
       <Avatar className="h-6 w-6 mt-0.5 shrink-0">

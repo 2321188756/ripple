@@ -1,36 +1,37 @@
 import { create } from "zustand";
-import { getSetting, setSetting } from "@/services/settings.service";
+import { getSetting, setSetting, settingsService } from "@/services/settings.service";
 
 interface SettingsState {
-  apiKey: string;
+  hasApiKey: boolean;
   apiBaseUrl: string;
   defaultModel: string;
   llmModel: string;
   loaded: boolean;
 
   load: () => Promise<void>;
-  setApiKey: (v: string) => Promise<void>;
-  setApiBaseUrl: (v: string) => Promise<void>;
-  setDefaultModel: (v: string) => Promise<void>;
-  setLlmModel: (v: string) => Promise<void>;
+  saveApiKey: (value: string) => Promise<void>;
+  clearApiKey: () => Promise<void>;
+  setApiBaseUrl: (value: string) => Promise<void>;
+  setDefaultModel: (value: string) => Promise<void>;
+  setLlmModel: (value: string) => Promise<void>;
 }
 
 export const useSettingsStore = create<SettingsState>((set) => ({
-  apiKey: "",
+  hasApiKey: false,
   apiBaseUrl: "http://192.168.0.123:3000/v1",
   defaultModel: "deepseek-v4-flash",
   llmModel: "deepseek-v4-flash",
   loaded: false,
 
   load: async () => {
-    const [apiKey, apiBaseUrl, defaultModel, llmModel] = await Promise.all([
-      getSetting("api_key"),
+    const [hasApiKey, apiBaseUrl, defaultModel, llmModel] = await Promise.all([
+      settingsService.hasApiKey(),
       getSetting("api_base_url"),
       getSetting("default_model"),
       getSetting("llm_model"),
     ]);
     set({
-      apiKey: apiKey || "",
+      hasApiKey,
       apiBaseUrl: apiBaseUrl || "http://192.168.0.123:3000/v1",
       defaultModel: defaultModel || "deepseek-v4-flash",
       llmModel: llmModel || "deepseek-v4-flash",
@@ -38,20 +39,24 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     });
   },
 
-  setApiKey: async (v: string) => {
-    await setSetting("api_key", v);
-    set({ apiKey: v });
+  saveApiKey: async (value: string) => {
+    await settingsService.saveApiKey(value);
+    set({ hasApiKey: true });
   },
-  setApiBaseUrl: async (v: string) => {
-    await setSetting("api_base_url", v);
-    set({ apiBaseUrl: v });
+  clearApiKey: async () => {
+    await settingsService.clearApiKey();
+    set({ hasApiKey: false });
   },
-  setDefaultModel: async (v: string) => {
-    await setSetting("default_model", v);
-    set({ defaultModel: v });
+  setApiBaseUrl: async (value: string) => {
+    await setSetting("api_base_url", value);
+    set({ apiBaseUrl: value });
   },
-  setLlmModel: async (v: string) => {
-    await setSetting("llm_model", v);
-    set({ llmModel: v });
+  setDefaultModel: async (value: string) => {
+    await setSetting("default_model", value);
+    set({ defaultModel: value });
+  },
+  setLlmModel: async (value: string) => {
+    await setSetting("llm_model", value);
+    set({ llmModel: value });
   },
 }));

@@ -81,8 +81,8 @@ impl KeyManager {
 
     /// 加密一段明文（如 API Key），返回 (ciphertext, nonce)
     pub fn encrypt(&self, plaintext: &str) -> Result<EncryptedKey, SecurityError> {
-        let cipher = Aes256Gcm::new_from_slice(&*self.master_key)
-            .map_err(|_| SecurityError::CipherInit)?;
+        let cipher =
+            Aes256Gcm::new_from_slice(&*self.master_key).map_err(|_| SecurityError::CipherInit)?;
 
         let mut nonce_bytes = [0u8; NONCE_LEN];
         rand::thread_rng().fill_bytes(&mut nonce_bytes);
@@ -100,8 +100,8 @@ impl KeyManager {
 
     /// 解密
     pub fn decrypt(&self, encrypted: &EncryptedKey) -> Result<String, SecurityError> {
-        let cipher = Aes256Gcm::new_from_slice(&*self.master_key)
-            .map_err(|_| SecurityError::CipherInit)?;
+        let cipher =
+            Aes256Gcm::new_from_slice(&*self.master_key).map_err(|_| SecurityError::CipherInit)?;
 
         if encrypted.nonce.len() != NONCE_LEN {
             return Err(SecurityError::Decryption);

@@ -6,7 +6,9 @@
 
 pub mod buffer;
 
-pub use buffer::{extract_signal, StreamBuffer, StreamBufferConfig, DEFAULT_MAX_CHARS, DEFAULT_MIN_INTERVAL};
+pub use buffer::{
+    extract_signal, StreamBuffer, StreamBufferConfig, DEFAULT_MAX_CHARS, DEFAULT_MIN_INTERVAL,
+};
 
 use futures::StreamExt;
 use ripple_core::{ProviderResult, StreamChunk};

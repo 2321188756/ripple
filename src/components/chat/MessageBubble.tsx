@@ -3,6 +3,7 @@ import { User, Sparkles, Expand } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
+import { ToolActivity } from "./ToolActivity";
 import { cn } from "@/lib/utils";
 import type { ContentBlock } from "@/types";
 
@@ -71,6 +72,7 @@ export const MessageBubble = memo(function MessageBubble({ role, content }: Mess
           </div>
         )}
         {text && <MarkdownRenderer content={text} />}
+        <ToolActivity blocks={content} />
       </div>
       {isUser && (
         <Avatar className="h-7 w-7 mt-0.5 shrink-0 ring-1 ring-border/50">

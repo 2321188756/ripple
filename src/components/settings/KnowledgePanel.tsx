@@ -89,7 +89,6 @@ export function KnowledgePanel() {
         await kbService.importFolder({
           kbId,
           folderPath: dir as string,
-          apiKey: settings.apiKey,
           apiBaseUrl: settings.apiBaseUrl,
         });
         await loadDocs(kbId);
@@ -148,7 +147,7 @@ export function KnowledgePanel() {
     try {
       await kbService.updateDocContent({
         id: preview.id, content: previewContent,
-        apiKey: settings.apiKey, apiBaseUrl: settings.apiBaseUrl,
+        apiBaseUrl: settings.apiBaseUrl,
       });
       setEditing(false);
       for (const kb of kbs) {

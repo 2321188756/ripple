@@ -18,77 +18,76 @@ interface ContextMenuProps {
   onClose: () => void;
 }
 
-/** 可复用的自定义右键菜单，定位在鼠标坐标 */
 export function ContextMenu({ items, position, onClose }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!position) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
+    const menu = ref.current;
+    const buttons = () => Array.from(menu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)') ?? []);
+    requestAnimationFrame(() => buttons()[0]?.focus());
+    const pointerHandler = (event: MouseEvent) => {
+      if (menu && !menu.contains(event.target as Node)) onClose();
+    };
+    const keyHandler = (event: KeyboardEvent) => {
+      const enabled = buttons();
+      if (event.key === "Escape" || event.key === "Tab") {
         onClose();
+        return;
       }
+      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) || enabled.length === 0) return;
+      event.preventDefault();
+      const current = enabled.indexOf(document.activeElement as HTMLButtonElement);
+      const next = event.key === "Home" ? 0
+        : event.key === "End" ? enabled.length - 1
+        : event.key === "ArrowDown" ? (current + 1 + enabled.length) % enabled.length
+        : (current - 1 + enabled.length) % enabled.length;
+      enabled[next]?.focus();
     };
-    // 延迟一帧注册，避免触发自身右键的 mousedown 关闭菜单
-    const rafId = requestAnimationFrame(() => document.addEventListener("mousedown", handler));
-    // cleanup 必须同时 cancelAnimationFrame：若 rAF 尚未触发就卸载，
-    // 仅 removeEventListener 是 no-op，rAF 回调仍会注册一个永不移除的 handler（泄漏）。
+    const closeOnViewportChange = () => onClose();
+    document.addEventListener("mousedown", pointerHandler);
+    document.addEventListener("keydown", keyHandler);
+    window.addEventListener("resize", closeOnViewportChange);
     return () => {
-      cancelAnimationFrame(rafId);
-      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("mousedown", pointerHandler);
+      document.removeEventListener("keydown", keyHandler);
+      window.removeEventListener("resize", closeOnViewportChange);
     };
-  }, [position, onClose]);
-
-  useEffect(() => {
-    if (!position) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
   }, [position, onClose]);
 
   if (!position) return null;
-
-  // 确保菜单不超出视口
-  const adjustedX = Math.min(position.x, window.innerWidth - 180);
-  const adjustedY = Math.min(position.y, window.innerHeight - items.length * 36 - 8);
+  const adjustedX = Math.max(8, Math.min(position.x, window.innerWidth - 180));
+  const adjustedY = Math.max(8, Math.min(position.y, window.innerHeight - 320));
 
   return (
     <div
       ref={ref}
       role="menu"
-      className="fixed z-[100] min-w-[160px] bg-popover border border-border rounded-lg shadow-xl py-1 animate-in fade-in-0 zoom-in-95"
+      aria-label="操作菜单"
+      className="fixed z-[100] max-h-[calc(100vh-16px)] min-w-[160px] overflow-y-auto rounded-lg border border-border bg-popover py-1 shadow-xl animate-in fade-in-0 zoom-in-95"
       style={{ left: adjustedX, top: adjustedY }}
     >
-      {items.map((item, i) =>
-        item.separator ? (
-          <div key={i} className="h-px bg-border mx-2 my-1" />
-        ) : (
-          <button
-            key={i}
-            role="menuitem"
-            disabled={item.disabled}
-            className={cn(
-              "w-full flex items-center gap-2.5 px-3 py-1.5 text-xs text-left transition-colors",
-              item.danger
-                ? "text-destructive hover:bg-destructive/10"
-                : "text-popover-foreground hover:bg-accent",
-              item.disabled && "opacity-40 cursor-not-allowed",
-            )}
-            onClick={() => {
-              item.onSelect();
-              onClose();
-            }}
-          >
-            {item.icon && <span className="w-4 h-4 shrink-0">{item.icon}</span>}
-            <span className="flex-1">{item.label}</span>
-            {item.shortcut && (
-              <span className="text-[10px] text-muted-foreground">{item.shortcut}</span>
-            )}
-          </button>
-        ),
-      )}
+      {items.map((item, index) => item.separator ? (
+        <div key={index} role="separator" className="mx-2 my-1 h-px bg-border" />
+      ) : (
+        <button
+          key={index}
+          type="button"
+          role="menuitem"
+          tabIndex={-1}
+          disabled={item.disabled}
+          className={cn(
+            "flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs transition-colors focus:bg-accent focus:outline-none",
+            item.danger ? "text-destructive hover:bg-destructive/10" : "text-popover-foreground hover:bg-accent",
+            item.disabled && "cursor-not-allowed opacity-40",
+          )}
+          onClick={() => { item.onSelect(); onClose(); }}
+        >
+          {item.icon && <span className="h-4 w-4 shrink-0">{item.icon}</span>}
+          <span className="flex-1">{item.label}</span>
+          {item.shortcut && <span className="text-[10px] text-muted-foreground">{item.shortcut}</span>}
+        </button>
+      ))}
     </div>
   );
 }

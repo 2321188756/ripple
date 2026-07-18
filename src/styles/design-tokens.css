@@ -85,11 +85,23 @@
     --motion-standard: 200ms;
     --ease-standard: cubic-bezier(0.2, 0, 0, 1);
 
-    /* === 磨砂玻璃（Mica/Glass） === */
-    --glass-blur: 20px;
-    --glass-saturate: 180%;
-    --glass-bg: hsl(var(--background) / 0.45);
-    --glass-sidebar-bg: hsl(var(--sidebar-background) / 0.45);
+    /* === 磨砂玻璃与壁纸阅读层 === */
+    --glass-blur: 24px;
+    --glass-saturate: 120%;
+    --glass-bg: hsl(var(--background) / 0.88);
+    --glass-sidebar-bg: hsl(var(--sidebar-background) / 0.93);
+    --content-wash-bg: hsl(var(--background) / 0.76);
+    --wallpaper-glass-bg: hsl(var(--background) / 0.9);
+    --wallpaper-glass-sidebar-bg: hsl(var(--sidebar-background) / 0.95);
+    --wallpaper-content-wash-bg: hsl(var(--background) / 0.82);
+    --wallpaper-glass-saturate: 112%;
+    --wallpaper-divider: hsl(var(--border) / 0.9);
+    --wallpaper-surface-shadow: 0 1px 0 hsl(var(--foreground) / 0.08), 0 12px 32px hsl(var(--foreground) / 0.08);
+
+    /* === 装饰渐变（独立于主色色阶，允许主题使用第二、第三色相） === */
+    --gradient-from: 243 75% 59%;
+    --gradient-via: 277 70% 62%;
+    --gradient-to: 199 89% 48%;
 
     /* === OKLCH 色相预设（hueColors 模式） === */
     --hue-primary: 230;
@@ -141,6 +153,19 @@
     --sidebar-accent-foreground: 210 20% 92%;
     --sidebar-border: 215 28% 18%;
     --sidebar-ring: 243 75% 67%;
+
+    --glass-bg: hsl(var(--background) / 0.84);
+    --glass-sidebar-bg: hsl(var(--sidebar-background) / 0.91);
+    --content-wash-bg: hsl(var(--background) / 0.72);
+    --wallpaper-glass-bg: hsl(var(--background) / 0.88);
+    --wallpaper-glass-sidebar-bg: hsl(var(--sidebar-background) / 0.94);
+    --wallpaper-content-wash-bg: hsl(var(--background) / 0.8);
+    --wallpaper-divider: hsl(var(--border) / 0.95);
+    --wallpaper-surface-shadow: 0 1px 0 hsl(0 0% 100% / 0.04), 0 12px 32px hsl(0 0% 0% / 0.28);
+
+    --gradient-from: 243 75% 67%;
+    --gradient-via: 277 70% 70%;
+    --gradient-to: 199 89% 60%;
 
     /* 暗色阴影用纯黑，alpha 更高才可见 */
     --shadow-xs: 0 1px 2px hsl(0 0% 0% / 0.3);

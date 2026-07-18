@@ -1,26 +1,23 @@
 import { getSetting, setSetting } from "@/services/settings.service";
 
 /** 默认 AI 主题生成 prompt 模板。__KW__ 会被替换为用户需求描述。 */
-export const DEFAULT_THEME_PROMPT = `你是资深 UI 视觉设计师，擅长为桌面应用创作有氛围感、有美感的主题配色。遵循 60-30-10 色彩法则与色系统一原则。
+export const DEFAULT_THEME_PROMPT = `你是资深 UI 视觉设计师，擅长为桌面应用创作有氛围感、层次丰富且可读的主题配色。遵循 60-30-10 色彩法则与 WCAG 对比度要求。
 
 用户需求：「__KW__」
 
-创作 3 套风格各异、有设计感的主题。核心原则：
+创作 3 套风格各异、有设计感的完整主题。每套主题必须是一个真正多色的系统：
+- 选择明确的 primary 交互色，以及与它有可见色相差、但和谐的 secondary/accent 色；根据气质采用互补、分裂互补、邻近或三角色相关系。
+- gradient-from / gradient-via / gradient-to 必须使用 2-3 个协调但可辨别的色相，不能只是同一色相的明暗变化。
+- warning、success、info、destructive 需要各自语义明确，同时保持整体氛围；不要把所有语义色都做成 primary 的同色相。
+- 深色背景使用有色相的深色（L 10-18%，S 15-35%），浅色背景使用带暖/冷调的灰白（L 93-97%，S 5-18%）；禁止纯黑和纯白。
+- 所有 surface（card、muted、sidebar 等）可轻微染色但要克制，让文字与控件层级清晰。
+- 每个 foreground / background 配对对比度至少 4.5:1；深色 foreground L≥88%，浅色 foreground L≤22%。
 
-【背景必须有色彩，禁止纯黑/纯白】
-- 深色主题背景：带色相的深色，L 10-18%，S 15-35%。例：深靛蓝 "240 30% 13%"、深酒红 "350 28% 12%"、深森林 "155 22% 11%"、深墨青 "190 32% 12%"。绝不要 "0 0% 0%" 或 L<8% 的死黑。
-- 浅色主题背景：带暖/冷调的灰白，L 93-97%，S 5-18%。例：暖米白 "40 16% 97%"、冷雾灰 "220 12% 96%"。绝不要 "0 0% 100%" 纯白。
+返回纯 JSON 数组（无 markdown、无解释）。每个元素为：
+{"id":"ai-x","name":"2-4字中文名","description":"氛围一句话","isBuiltin":false,"colors":{"light":PALETTE,"dark":PALETTE},"agentStyle":{"iconColor":"#hex","borderColor":"#hex","borderWidth":2,"nameColor":"#hex"}}
 
-【主色是灵魂】primary 饱和度 S 55-78%，是视觉锚点，与背景色相形成对比/互补/邻近关系营造氛围。
-
-【色系统一，拒绝纯灰】card/muted/border/sidebar-background 都微染主色相（同 H 调 S/L）。例：主色靛蓝(240)时 card 用 "240 16% 16%"(深) 或 "240 10% 99%"(浅)，而非 "0 0% 15%" 纯灰。
-
-【双色创作，3 套风格各异】不同色相/明暗/氛围。根据需求情绪定调：「赛博朋克」=霓虹青紫高饱和；「温暖拿铁」=暖棕米白柔光；「雨后森林」=墨绿青灰湿润；「星空夜幕」=深靛紫罗兰微光；「极简留白」=低饱和灰白克制。
-
-【对比度】深色背景 foreground L≥88%；浅色背景 foreground L≤22%。对比度≥4.5:1。
-
-返回纯 JSON 数组（无 markdown、无解释），每个元素：
-{"id":"ai-x","name":"2-4字中文名","description":"氛围一句话","isBuiltin":false,"colors":{"light":{"--background":"H S% L%","--foreground":"H S% L%","--primary":"H S% L%","--card":"H S% L%","--border":"H S% L%","--muted":"H S% L%","--sidebar-background":"H S% L%"},"dark":{同样7个键}},"agentStyle":{"icon_color":"#hex","border_color":"#hex","border_width":2,"name_color":"#hex"}}
+PALETTE 必须是一个对象，且 light 与 dark 都必须完整包含以下键，值均为 "H S% L%"：
+--background,--foreground,--card,--card-foreground,--popover,--popover-foreground,--primary,--primary-foreground,--secondary,--secondary-foreground,--muted,--muted-foreground,--accent,--accent-foreground,--destructive,--destructive-foreground,--warning,--warning-foreground,--success,--success-foreground,--info,--info-foreground,--border,--input,--ring,--primary-50,--primary-100,--primary-200,--primary-300,--primary-400,--primary-500,--primary-600,--primary-700,--primary-800,--primary-900,--sidebar-background,--sidebar-foreground,--sidebar-primary,--sidebar-primary-foreground,--sidebar-accent,--sidebar-accent-foreground,--sidebar-border,--sidebar-ring,--gradient-from,--gradient-via,--gradient-to。
 
 只返回 JSON 数组。`;
 

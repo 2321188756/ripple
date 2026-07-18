@@ -1,6 +1,17 @@
 import { invoke } from "./invoke";
 import type { KnowledgeBase, Document, SearchResult } from "@/types";
 
+export interface FolderImportFailure {
+  filePath: string;
+  stage: string;
+  error: string;
+}
+
+export interface FolderImportResult {
+  imported: Document[];
+  failures: FolderImportFailure[];
+}
+
 export const kbService = {
   listKBs: (): Promise<KnowledgeBase[]> =>
     invoke<KnowledgeBase[]>("list_kbs"),
@@ -17,7 +28,6 @@ export const kbService = {
   importDoc: (params: {
     kbId: string;
     filePath: string;
-    apiKey: string;
     apiBaseUrl: string;
     embeddingModel?: string;
   }): Promise<Document> =>
@@ -30,11 +40,10 @@ export const kbService = {
   importFolder: (params: {
     kbId: string;
     folderPath: string;
-    apiKey: string;
     apiBaseUrl: string;
     embeddingModel?: string;
-  }): Promise<Document[]> =>
-    invoke<Document[]>("import_folder", {
+  }): Promise<FolderImportResult> =>
+    invoke<FolderImportResult>("import_folder", {
       embeddingModel: "Qwen/Qwen3-Embedding-8B",
       ...params,
     }),
@@ -56,7 +65,6 @@ export const kbService = {
   updateDocContent: (params: {
     id: string;
     content: string;
-    apiKey: string;
     apiBaseUrl: string;
     embeddingModel?: string;
   }): Promise<void> =>
@@ -69,7 +77,6 @@ export const kbService = {
     query: string;
     kbId?: string;
     topK?: number;
-    apiKey: string;
     apiBaseUrl?: string;
   }): Promise<SearchResult[]> =>
     invoke<SearchResult[]>("search_kb", params),

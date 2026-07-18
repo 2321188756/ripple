@@ -23,7 +23,8 @@ export const ThemeCard = memo(function ThemeCard({
   theme, isActive, isDark, onApply, onExport, onDelete, onSetWallpaper,
 }: ThemeCardProps) {
   const palette = isDark ? theme.colors.dark : theme.colors.light;
-  const hsl = (key: string) => `hsl(${palette[key] || "0 0% 50%"})`;
+  const fallback = isDark ? "224 71% 8%" : "240 10% 97%";
+  const hsl = (key: string) => `hsl(${palette[key] || palette["--primary"] || fallback})`;
   const isBuiltin = theme.isBuiltin;
   const wallpaperStyle = theme.wallpaper
     ? { backgroundImage: `url(${convertFileSrc(theme.wallpaper)})`, backgroundSize: "cover", backgroundPosition: "center" }
@@ -44,7 +45,12 @@ export const ThemeCard = memo(function ThemeCard({
         <div className="ml-[28%] space-y-1.5">
           <div className="h-3 w-3/4 rounded-full" style={{ background: hsl("--muted") }} />
           <div className="h-3 w-1/2 rounded-full" style={{ background: hsl("--card"), border: `1px solid ${hsl("--border")}` }} />
-          <div className="h-3 w-2/3 rounded-full" style={{ background: hsl("--primary"), opacity: 0.9 }} />
+          <div className="h-3 w-2/3 rounded-full" style={{ background: `linear-gradient(90deg, ${hsl("--gradient-from")}, ${hsl("--gradient-via")}, ${hsl("--gradient-to")})` }} />
+          <div className="flex gap-1">
+            {["--primary", "--accent", "--success", "--warning", "--info"].map((key) => (
+              <span key={key} className="h-2 w-2 rounded-full" style={{ background: hsl(key) }} />
+            ))}
+          </div>
         </div>
         {/* 壁纸标记 */}
         {theme.wallpaper && (

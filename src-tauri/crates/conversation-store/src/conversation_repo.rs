@@ -12,7 +12,9 @@ use crate::error::{StoreError, StoreResult};
 /// 转义 LIKE 通配符（%、_、\），配合 `ESCAPE '\'` 使用，
 /// 避免用户搜索词中的 %/_ 被当作通配符导致结果过宽。
 fn escape_like(q: &str) -> String {
-    q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+    q.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 pub struct ConversationRepo;
@@ -65,13 +67,14 @@ impl ConversationRepo {
                     system_prompt: r.get(6)?,
                     pinned: r.get::<_, i32>(7)? != 0,
                     archived: r.get::<_, i32>(8)? != 0,
-                    metadata: serde_json::from_str(&r.get::<_, String>(9)?)
-                        .unwrap_or_default(),
+                    metadata: serde_json::from_str(&r.get::<_, String>(9)?).unwrap_or_default(),
                 })
             },
         )
         .map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => StoreError::NotFound(format!("conversation {id}")),
+            rusqlite::Error::QueryReturnedNoRows => {
+                StoreError::NotFound(format!("conversation {id}"))
+            }
             _ => StoreError::Database(e.to_string()),
         })
     }
@@ -85,44 +88,64 @@ impl ConversationRepo {
     ) -> StoreResult<Vec<Conversation>> {
         let (where_clause, query_params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
             if let Some(q) = search {
-                ("WHERE title LIKE ?1 ESCAPE '\\' ORDER BY updated_at DESC LIMIT ?2 OFFSET ?3".into(),
-                 vec![Box::new(format!("%{}%", escape_like(q))), Box::new(limit as i64), Box::new(offset as i64)])
+                (
+                    "WHERE title LIKE ?1 ESCAPE '\\' ORDER BY updated_at DESC LIMIT ?2 OFFSET ?3"
+                        .into(),
+                    vec![
+                        Box::new(format!("%{}%", escape_like(q))),
+                        Box::new(limit as i64),
+                        Box::new(offset as i64),
+                    ],
+                )
             } else {
-                ("ORDER BY updated_at DESC LIMIT ?1 OFFSET ?2".into(),
-                 vec![Box::new(limit as i64), Box::new(offset as i64)])
+                (
+                    "ORDER BY updated_at DESC LIMIT ?1 OFFSET ?2".into(),
+                    vec![Box::new(limit as i64), Box::new(offset as i64)],
+                )
             };
 
-        let sql = format!("SELECT id, title, created_at, updated_at, model_id, provider_id,
+        let sql = format!(
+            "SELECT id, title, created_at, updated_at, model_id, provider_id,
                           system_prompt, pinned, archived, metadata
-                   FROM conversations {where_clause}");
+                   FROM conversations {where_clause}"
+        );
 
-        let mut stmt = conn.prepare(&sql)
+        let mut stmt = conn
+            .prepare(&sql)
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = query_params.iter().map(|p| p.as_ref()).collect();
-        let rows = stmt.query_map(param_refs.as_slice(), |r| {
-            Ok(Conversation {
-                id: r.get(0)?,
-                title: r.get(1)?,
-                created_at: r.get::<_, String>(2).ok()
-                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
-                    .map(|d| d.to_utc())
-                    .unwrap_or_else(|| Utc::now()),
-                updated_at: r.get::<_, String>(3).ok()
-                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
-                    .map(|d| d.to_utc())
-                    .unwrap_or_else(|| Utc::now()),
-                model_id: r.get(4)?,
-                provider_id: r.get(5)?,
-                system_prompt: r.get(6)?,
-                pinned: r.get::<_, i32>(7)? != 0,
-                archived: r.get::<_, i32>(8)? != 0,
-                metadata: r.get::<_, String>(9).ok()
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default(),
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            query_params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |r| {
+                Ok(Conversation {
+                    id: r.get(0)?,
+                    title: r.get(1)?,
+                    created_at: r
+                        .get::<_, String>(2)
+                        .ok()
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                        .map(|d| d.to_utc())
+                        .unwrap_or_else(Utc::now),
+                    updated_at: r
+                        .get::<_, String>(3)
+                        .ok()
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                        .map(|d| d.to_utc())
+                        .unwrap_or_else(Utc::now),
+                    model_id: r.get(4)?,
+                    provider_id: r.get(5)?,
+                    system_prompt: r.get(6)?,
+                    pinned: r.get::<_, i32>(7)? != 0,
+                    archived: r.get::<_, i32>(8)? != 0,
+                    metadata: r
+                        .get::<_, String>(9)
+                        .ok()
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                        .unwrap_or_default(),
+                })
             })
-        })
-        .map_err(|e| StoreError::Database(e.to_string()))?;
+            .map_err(|e| StoreError::Database(e.to_string()))?;
 
         let mut out = Vec::with_capacity(limit);
         for row in rows {
@@ -135,6 +158,7 @@ impl ConversationRepo {
     ///
     /// 所有字段更新包在单个事务内，避免半更新导致不一致（如 system_prompt 更新成功
     /// 而 pinned 失败时部分提交）。
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         conn: &PooledConnection<SqliteConnectionManager>,
         id: &str,
@@ -154,48 +178,52 @@ impl ConversationRepo {
             tx.execute(
                 "UPDATE conversations SET title = ?1, updated_at = ?2 WHERE id = ?3",
                 params![v, now, id],
-            ).map_err(|e| StoreError::Database(e.to_string()))?;
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
         }
         if let Some(v) = system_prompt {
             tx.execute(
                 "UPDATE conversations SET system_prompt = ?1, updated_at = ?2 WHERE id = ?3",
                 params![v, now, id],
-            ).map_err(|e| StoreError::Database(e.to_string()))?;
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
         }
         if let Some(v) = pinned {
             tx.execute(
                 "UPDATE conversations SET pinned = ?1, updated_at = ?2 WHERE id = ?3",
                 params![v as i32, now, id],
-            ).map_err(|e| StoreError::Database(e.to_string()))?;
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
         }
         if let Some(v) = archived {
             tx.execute(
                 "UPDATE conversations SET archived = ?1, updated_at = ?2 WHERE id = ?3",
                 params![v as i32, now, id],
-            ).map_err(|e| StoreError::Database(e.to_string()))?;
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
         }
         if let Some(v) = model_id {
             tx.execute(
                 "UPDATE conversations SET model_id = ?1, updated_at = ?2 WHERE id = ?3",
                 params![v, now, id],
-            ).map_err(|e| StoreError::Database(e.to_string()))?;
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
         }
         if let Some(v) = provider_id {
             tx.execute(
                 "UPDATE conversations SET provider_id = ?1, updated_at = ?2 WHERE id = ?3",
                 params![v, now, id],
-            ).map_err(|e| StoreError::Database(e.to_string()))?;
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
         }
 
-        tx.commit().map_err(|e| StoreError::Database(e.to_string()))?;
+        tx.commit()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
         Self::get_by_id(conn, id)
     }
 
     /// 删除对话（级联删除消息）
-    pub fn delete(
-        conn: &PooledConnection<SqliteConnectionManager>,
-        id: &str,
-    ) -> StoreResult<()> {
+    pub fn delete(conn: &PooledConnection<SqliteConnectionManager>, id: &str) -> StoreResult<()> {
         let affected = conn
             .execute("DELETE FROM conversations WHERE id = ?1", [id])
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -211,16 +239,19 @@ impl ConversationRepo {
         conn: &PooledConnection<SqliteConnectionManager>,
         search: Option<&str>,
     ) -> StoreResult<usize> {
-        let (sql, param): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
-            if let Some(q) = search {
-                ("SELECT COUNT(*) FROM conversations WHERE title LIKE ?1 ESCAPE '\\'".into(),
-                 vec![Box::new(format!("%{}%", escape_like(q)))])
-            } else {
-                ("SELECT COUNT(*) FROM conversations".into(), vec![])
-            };
+        let (sql, param): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(q) = search {
+            (
+                "SELECT COUNT(*) FROM conversations WHERE title LIKE ?1 ESCAPE '\\'".into(),
+                vec![Box::new(format!("%{}%", escape_like(q)))],
+            )
+        } else {
+            ("SELECT COUNT(*) FROM conversations".into(), vec![])
+        };
 
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = param.iter().map(|p| p.as_ref()).collect();
-        let count: i64 = conn.query_row(&sql, param_refs.as_slice(), |r| r.get(0))
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param.iter().map(|p| p.as_ref()).collect();
+        let count: i64 = conn
+            .query_row(&sql, param_refs.as_slice(), |r| r.get(0))
             .map_err(|e| StoreError::Database(e.to_string()))?;
         Ok(count as usize)
     }

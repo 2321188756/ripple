@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run build
+
+  native-e2e:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      RIPPLE_DATA_DIR: ${{ github.workspace }}\\.e2e-data
+      RIPPLE_E2E_BINARY: ${{ github.workspace }}\\src-tauri\\target\\release\\ripple-app.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - run: npm run build:e2e:native
+      - run: npm run test:e2e:native
+      - name: Verify isolated native data directory
+        shell: pwsh
+        run: |
+          if (!(Test-Path "$env:RIPPLE_DATA_DIR\ripple.db")) { throw "isolated database was not created" }
+          if (!(Test-Path "$env:RIPPLE_DATA_DIR\.ripple-install-secret")) { throw "isolated install secret was not created" }
+          if (!(Test-Path "$env:RIPPLE_DATA_DIR\logs")) { throw "isolated log directory was not created" }
+      - name: Upload sanitized native test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-e2e-artifacts
+          path: |
+            .e2e-data/logs/
+            e2e-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  rust:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets -- -D warnings
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --workspace

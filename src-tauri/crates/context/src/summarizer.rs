@@ -42,7 +42,7 @@ impl Summarizer for TemplateSummarizer {
             let truncated: String = text.chars().take(self.per_message_chars).collect();
             out.push_str(&format!("{role}: {truncated}"));
             if text.chars().count() > self.per_message_chars {
-                out.push_str("…");
+                out.push('…');
             }
             out.push('\n');
         }
@@ -56,7 +56,9 @@ mod tests {
 
     #[tokio::test]
     async fn template_summarizer_truncates() {
-        let s = TemplateSummarizer { per_message_chars: 5 };
+        let s = TemplateSummarizer {
+            per_message_chars: 5,
+        };
         let m1 = Message::new_user("c1", "hello world this is long");
         let summary = s.summarize(&[m1]).await;
         assert!(summary.contains("user: hello…"));

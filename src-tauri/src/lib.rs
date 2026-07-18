@@ -11,19 +11,55 @@ mod state;
 pub use state::AppState;
 
 /// 运行时日志级别切换 handle（reload layer），存 OnceCell 供 set_debug_enabled 访问。
-static LOG_RELOAD: once_cell::sync::OnceCell<reload::Handle<EnvFilter, Registry>> = once_cell::sync::OnceCell::new();
+static LOG_RELOAD: once_cell::sync::OnceCell<reload::Handle<EnvFilter, Registry>> =
+    once_cell::sync::OnceCell::new();
 
 /// Debug 模式开关。true 时输出请求体/流式 chunk/工具调用等细节日志。
 static DEBUG_MODE: AtomicBool = AtomicBool::new(false);
 
 const INFO_FILTER: &str = "ripple_app=info,ripple=info,ripple_core=info,ripple_model_provider=info,ripple_streaming=info,ripple_security=info,ripple_context=info,ripple_conversation_store=info,warn";
 const DEBUG_FILTER: &str = "ripple_app=debug,ripple=debug,ripple_core=debug,ripple_model_provider=debug,ripple_streaming=debug,ripple_security=debug,ripple_context=debug,ripple_conversation_store=debug,trace";
+const DATA_DIR_ENV: &str = "RIPPLE_DATA_DIR";
+
+fn inferred_data_dir(executable: Option<PathBuf>) -> PathBuf {
+    executable
+        .and_then(|path| path.parent().map(PathBuf::from))
+        .map(|mut path| {
+            if path.ends_with("debug") || path.ends_with("release") {
+                path.pop();
+                path.pop();
+            }
+            if path.file_name().and_then(|name| name.to_str()) == Some("src-tauri") {
+                path.pop();
+            }
+            path
+        })
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn data_dir_from_override(
+    override_value: Option<std::ffi::OsString>,
+    executable: Option<PathBuf>,
+) -> PathBuf {
+    override_value
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| inferred_data_dir(executable))
+}
+
+fn runtime_data_dir() -> PathBuf {
+    data_dir_from_override(std::env::var_os(DATA_DIR_ENV), std::env::current_exe().ok())
+}
 
 /// 运行时切换 debug 日志。同时更新全局开关（供 if debug { ... } 场景）+ reload filter 级别。
 pub fn set_debug_enabled(enabled: bool) {
     DEBUG_MODE.store(enabled, Ordering::SeqCst);
     if let Some(handle) = LOG_RELOAD.get() {
-        let f = if enabled { EnvFilter::new(DEBUG_FILTER) } else { EnvFilter::new(INFO_FILTER) };
+        let f = if enabled {
+            EnvFilter::new(DEBUG_FILTER)
+        } else {
+            EnvFilter::new(INFO_FILTER)
+        };
         let _ = handle.modify(|cur| *cur = f);
     }
     tracing::info!(enabled, "debug logging toggled");
@@ -35,24 +71,8 @@ pub fn debug_enabled() -> bool {
 }
 
 pub fn run() {
-    // 日志目录：项目根下的 logs/
-    let log_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .map(|p| {
-            // 在开发模式下 (target/debug/)，日志放到项目根
-            let mut d = p;
-            // 上两级：target/debug/ → project root
-            if d.ends_with("debug") || d.ends_with("release") {
-                d.pop(); d.pop();
-            }
-            // 再往上一级：src-tauri/ → project root
-            if d.file_name().and_then(|s| s.to_str()) == Some("src-tauri") {
-                d.pop();
-            }
-            d.join("logs")
-        })
-        .unwrap_or_else(|| std::path::PathBuf::from("./logs"));
+    let data_dir = runtime_data_dir();
+    let log_dir = data_dir.join("logs");
     std::fs::create_dir_all(&log_dir).ok();
     commands::log::set_log_dir(log_dir.clone());
 
@@ -65,7 +85,11 @@ pub fn run() {
 
     tracing_subscriber::registry()
         .with(filter_layer)
-        .with(fmt::Layer::new().with_writer(std::io::stdout).with_target(true))
+        .with(
+            fmt::Layer::new()
+                .with_writer(std::io::stdout)
+                .with_target(true),
+        )
         .with(
             fmt::Layer::new()
                 .with_writer(file_writer)
@@ -77,24 +101,17 @@ pub fn run() {
     tracing::info!("=== Ripple starting ===");
     tracing::info!(log_dir = %log_dir.display());
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_store::Builder::default().build())
-        .setup(|app| {
-            // 数据目录放项目根（同日志目录）
-            let data_dir = std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-                .map(|p| {
-                    let mut d = p;
-                    if d.ends_with("debug") || d.ends_with("release") { d.pop(); d.pop(); }
-                    if d.file_name().and_then(|s| s.to_str()) == Some("src-tauri") { d.pop(); }
-                    d
-                })
-                .unwrap_or_else(|| PathBuf::from("."));
-            std::fs::create_dir_all(&data_dir).ok();
+        .plugin(tauri_plugin_store::Builder::default().build());
+    #[cfg(feature = "e2e")]
+    let builder = builder.plugin(tauri_plugin_wdio::init());
+
+    builder
+        .setup(move |app| {
+            std::fs::create_dir_all(&data_dir).expect("failed to create Ripple data directory");
             tracing::info!(data_dir = %data_dir.display());
 
             // 数据库
@@ -107,7 +124,11 @@ pub fn run() {
             {
                 if let Ok(conn) = db_pool.get_timeout(std::time::Duration::from_secs(3)) {
                     let v: Option<String> = conn
-                        .query_row("SELECT value FROM settings WHERE key='debug_logging'", [], |r| r.get(0))
+                        .query_row(
+                            "SELECT value FROM settings WHERE key='debug_logging'",
+                            [],
+                            |r| r.get(0),
+                        )
                         .ok();
                     if v.as_deref() == Some("true") {
                         set_debug_enabled(true);
@@ -115,16 +136,33 @@ pub fn run() {
                 }
             }
 
+            // 每个安装使用独立且持久的随机 secret；已有文件损坏时拒绝启动，避免生成新值导致密文不可恢复。
+            let install_secret_path = data_dir.join(".ripple-install-secret");
+            let install_secret = match std::fs::read_to_string(&install_secret_path) {
+                Ok(secret) if secret.trim().len() >= 32 => secret,
+                Ok(_) => panic!("invalid Ripple install secret"),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    let secret = uuid::Uuid::new_v4().to_string();
+                    std::fs::write(&install_secret_path, &secret)
+                        .expect("failed to persist install secret");
+                    secret
+                }
+                Err(error) => panic!("failed to read Ripple install secret: {error}"),
+            };
+
             // 注册表
             let providers = ripple_model_provider::ProviderRegistry::with_builtins();
-            let key_manager = ripple_security::KeyManager::new("ripple-dev-machine", None)
+            let key_manager = ripple_security::KeyManager::new(install_secret.trim(), None)
                 .expect("failed to init key manager");
+            let key_manager = std::sync::Arc::new(key_manager);
+            commands::settings::migrate_legacy_api_key(&db_pool, &key_manager)
+                .unwrap_or_else(|error| panic!("failed to migrate legacy API key: {error}"));
             tracing::info!("provider registry + key manager ready");
 
             let state = AppState {
                 db: db_pool,
                 providers: std::sync::Arc::new(providers),
-                key_manager: std::sync::Arc::new(key_manager),
+                key_manager,
                 active_streams: std::sync::Arc::new(tokio::sync::Mutex::new(
                     std::collections::HashMap::new(),
                 )),
@@ -145,8 +183,9 @@ pub fn run() {
             // 启动时后台索引所有 Agent 的记忆（fire-and-forget，不阻塞启动）
             {
                 let db_clone = app.state::<AppState>().db.clone();
+                let key_manager = app.state::<AppState>().key_manager.clone();
                 tauri::async_runtime::spawn(async move {
-                    crate::commands::memory::index_all_agents(db_clone).await;
+                    crate::commands::memory::index_all_agents(db_clone, key_manager).await;
                 });
             }
             Ok(())
@@ -173,6 +212,9 @@ pub fn run() {
             commands::test_chat::test_chat,
             commands::settings::get_setting,
             commands::settings::set_setting,
+            commands::settings::save_api_key,
+            commands::settings::has_api_key,
+            commands::settings::clear_api_key,
             commands::settings::set_debug_logging,
             commands::settings::get_debug_logging,
             commands::settings::list_available_models,
@@ -205,9 +247,8 @@ pub fn run() {
             commands::memory::delete_memory_file,
             commands::memory::memory_stats,
             commands::memory::open_memory_dir,
-            commands::memory::list_all_memory_files,
+            commands::memory::memory_overview,
             commands::memory::save_memory_file,
-            commands::memory::delete_agent_memory_file,
             commands::memory::generate_memory_tags,
             commands::plugins::approve_tool_call,
             commands::plugins::get_agent_permission_level,
@@ -225,4 +266,30 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inferred_data_dir_preserves_existing_layout() {
+        let executable = PathBuf::from("C:/workspace/Ripple/src-tauri/target/debug/ripple.exe");
+        assert_eq!(
+            inferred_data_dir(Some(executable)),
+            PathBuf::from("C:/workspace/Ripple")
+        );
+    }
+
+    #[test]
+    fn explicit_data_dir_value_is_used_verbatim() {
+        let value = PathBuf::from("C:/temp/ripple-e2e");
+        assert_eq!(
+            data_dir_from_override(
+                Some(value.as_os_str().to_os_string()),
+                Some(PathBuf::from("C:/ignored/ripple.exe")),
+            ),
+            value
+        );
+    }
 }

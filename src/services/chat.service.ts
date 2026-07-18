@@ -3,7 +3,6 @@ import { invokeWithTimeout, invoke } from "./invoke";
 export interface SendMessageParams {
   conversationId: string;
   content: string;
-  apiKey: string;
   apiBaseUrl: string;
   model: string;
   agentMode: boolean;
@@ -27,7 +26,6 @@ export const chatService = {
   regenerate: (params: {
     conversationId: string;
     messageId: string;
-    apiKey: string;
     apiBaseUrl: string;
     model?: string;
     agentMode?: boolean;

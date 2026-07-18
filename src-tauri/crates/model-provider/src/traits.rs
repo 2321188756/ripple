@@ -4,11 +4,12 @@ use async_trait::async_trait;
 use futures::Stream;
 use std::pin::Pin;
 
-use ripple_core::{ChatRequest, ChatResponse, ModelInfo, ProviderResult, StreamChunk, ToolDefinition};
+use ripple_core::{
+    ChatRequest, ChatResponse, ModelInfo, ProviderResult, StreamChunk, ToolDefinition,
+};
 
 /// 流式 chunk 的异步 Stream 类型
-pub type ChunkStream =
-    Pin<Box<dyn Stream<Item = ProviderResult<StreamChunk>> + Send>>;
+pub type ChunkStream = Pin<Box<dyn Stream<Item = ProviderResult<StreamChunk>> + Send>>;
 
 #[async_trait]
 pub trait ModelProvider: Send + Sync {
@@ -28,7 +29,8 @@ pub trait ModelProvider: Send + Sync {
     async fn chat(&self, api_key: &str, request: ChatRequest) -> ProviderResult<ChatResponse>;
 
     /// 流式补全，返回异步 Stream
-    async fn chat_stream(&self, api_key: &str, request: ChatRequest) -> ProviderResult<ChunkStream>;
+    async fn chat_stream(&self, api_key: &str, request: ChatRequest)
+        -> ProviderResult<ChunkStream>;
 
     /// 将统一 ToolDefinition 转为 Provider 特定的 JSON schema
     fn convert_tools(&self, tools: &[ToolDefinition]) -> serde_json::Value;

@@ -1,8 +1,8 @@
 //! 使用量统计
 
-use std::time::Duration;
 use crate::state::AppState;
 use serde::Serialize;
+use std::time::Duration;
 use tauri::State;
 
 #[derive(Serialize)]
@@ -16,27 +16,61 @@ pub struct UsageStats {
 }
 
 #[derive(Serialize)]
-pub struct RoleCount { pub role: String, pub count: usize }
+pub struct RoleCount {
+    pub role: String,
+    pub count: usize,
+}
 
 #[derive(Serialize)]
-pub struct DailyStat { pub date: String, pub messages: usize, pub tokens: usize }
+pub struct DailyStat {
+    pub date: String,
+    pub messages: usize,
+    pub tokens: usize,
+}
 
 #[derive(Serialize)]
-pub struct ModelCount { pub model: String, pub conversations: usize }
+pub struct ModelCount {
+    pub model: String,
+    pub conversations: usize,
+}
 
 #[tauri::command]
 pub async fn get_usage_stats(state: State<'_, AppState>) -> Result<UsageStats, String> {
-    let conn = state.db.get_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
+    let conn = state
+        .db
+        .get_timeout(Duration::from_secs(5))
+        .map_err(|e| e.to_string())?;
 
-    let total_conversations: usize = conn.query_row("SELECT COUNT(*) FROM conversations", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize;
-    let total_messages: usize = conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize;
-    let total_tokens: usize = conn.query_row("SELECT COALESCE(SUM(token_count),0) FROM messages WHERE token_count IS NOT NULL", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize;
+    let total_conversations: usize = conn
+        .query_row("SELECT COUNT(*) FROM conversations", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap_or(0) as usize;
+    let total_messages: usize = conn
+        .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get::<_, i64>(0))
+        .unwrap_or(0) as usize;
+    let total_tokens: usize = conn
+        .query_row(
+            "SELECT COALESCE(SUM(token_count),0) FROM messages WHERE token_count IS NOT NULL",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0) as usize;
 
     // 按角色统计
     let mut messages_by_role = Vec::new();
-    if let Ok(mut stmt) = conn.prepare("SELECT role, COUNT(*) FROM messages GROUP BY role ORDER BY COUNT(*) DESC") {
-        if let Ok(rows) = stmt.query_map([], |r| Ok(RoleCount { role: r.get(0)?, count: r.get::<_, i64>(1)? as usize })) {
-            for row in rows.flatten() { messages_by_role.push(row); }
+    if let Ok(mut stmt) =
+        conn.prepare("SELECT role, COUNT(*) FROM messages GROUP BY role ORDER BY COUNT(*) DESC")
+    {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok(RoleCount {
+                role: r.get(0)?,
+                count: r.get::<_, i64>(1)? as usize,
+            })
+        }) {
+            for row in rows.flatten() {
+                messages_by_role.push(row);
+            }
         }
     }
 
@@ -56,5 +90,12 @@ pub async fn get_usage_stats(state: State<'_, AppState>) -> Result<UsageStats, S
         }
     }
 
-    Ok(UsageStats { total_conversations, total_messages, total_tokens, messages_by_role, daily_stats, top_models })
+    Ok(UsageStats {
+        total_conversations,
+        total_messages,
+        total_tokens,
+        messages_by_role,
+        daily_stats,
+        top_models,
+    })
 }

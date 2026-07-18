@@ -11,12 +11,17 @@ crate-type = ["lib", "cdylib", "staticlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+e2e = ["dep:tauri-plugin-wdio"]
+
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-store = "2"
+tauri-plugin-wdio = { version = "1.2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -58,6 +63,12 @@ members = [
     "crates/security",
     "crates/conversation-store",
     "crates/rag",
+    "crates/knowledge-domain",
+    "crates/knowledge-store",
+    "crates/knowledge-ingest",
+    "crates/knowledge-retrieval",
+    "crates/knowledge-server",
+    "crates/knowledge-testkit",
 ]
 
 [workspace.package]
@@ -73,6 +84,7 @@ async-trait = "0.1"
 futures = "0.3"
 thiserror = "2"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
 eventsource-stream = "0.2"
 tokio-stream = "0.1"
@@ -86,6 +98,17 @@ r2d2 = "0.8"
 r2d2_sqlite = "0.25"
 rand = "0.8"
 pdf-extract = "0.7"
+axum = "0.8"
+tower-http = { version = "0.6", features = ["trace", "request-id", "sensitive-headers", "limit"] }
+tower = "0.5"
+http = "1"
+http-body-util = "0.1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "migrate", "macros"] }
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+subtle = "2"
+url = "2"
 
 # 内部 crate 互引
 ripple-core = { path = "crates/core" }
@@ -95,3 +118,8 @@ ripple-context = { path = "crates/context" }
 ripple-security = { path = "crates/security" }
 ripple-conversation-store = { path = "crates/conversation-store" }
 ripple-rag = { path = "crates/rag" }
+ripple-knowledge-domain = { path = "crates/knowledge-domain" }
+ripple-knowledge-store = { path = "crates/knowledge-store" }
+ripple-knowledge-ingest = { path = "crates/knowledge-ingest" }
+ripple-knowledge-retrieval = { path = "crates/knowledge-retrieval" }
+ripple-knowledge-testkit = { path = "crates/knowledge-testkit" }

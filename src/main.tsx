@@ -10,6 +10,10 @@ import "./styles/globals.css";
 const App = lazy(() => import("./App"));
 const isSettingsWindow = window.location.hash.replace(/^#/, "") === "settings";
 
+if (import.meta.env.VITE_RIPPLE_E2E === "true") {
+  void import("@wdio/tauri-plugin");
+}
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     {isSettingsWindow ? (

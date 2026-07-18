@@ -1,0 +1,13 @@
+{
+  "identifier": "settings",
+  "description": "设置窗口最小权限",
+  "windows": ["settings"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-set-focus",
+    "dialog:default",
+    "dialog:allow-open",
+    "fs:read-all"
+  ]
+}

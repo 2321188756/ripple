@@ -13,7 +13,9 @@ use tokio::sync::{Mutex, Notify};
 /// `cancel` 用于 select! 中唤醒并中断流；`cancelled` 为锁存标志，
 /// 即便 notify 在首次 poll 前发出（极小竞态窗口）也能在循环顶被捕获。
 pub struct ActiveStream {
+    pub stream_id: String,
     pub conversation_id: String,
+    pub message_id: String,
     pub cancel: Arc<Notify>,
     pub cancelled: Arc<AtomicBool>,
 }

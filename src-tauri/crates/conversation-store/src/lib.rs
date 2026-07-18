@@ -61,7 +61,17 @@ mod tests {
         let conn = pool.get().unwrap();
         let conv = ConversationRepo::create(&conn, "openai", "gpt-4o", None, None).unwrap();
 
-        let updated = ConversationRepo::update(&conn, &conv.id, Some("Renamed"), None, None, None, None, None).unwrap();
+        let updated = ConversationRepo::update(
+            &conn,
+            &conv.id,
+            Some("Renamed"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(updated.title, "Renamed");
 
         ConversationRepo::delete(&conn, &conv.id).unwrap();
@@ -97,16 +107,54 @@ mod tests {
             })
             .collect();
 
-        // 正序：msg 0, 1, 2, 3, 4
+        // 首页返回最新两条，但页内仍按时间正序展示。
         let page1 = MessageRepo::list_by_conversation(&conn, &conv.id, 2, None).unwrap();
         assert_eq!(page1.len(), 2);
-        assert_eq!(page1[0].text(), "msg 0");
+        assert_eq!(page1[0].text(), "msg 3");
+        assert_eq!(page1[1].text(), "msg 4");
 
-        // 游标：取 msg 2 之前的
-        let page2 = MessageRepo::list_by_conversation(&conn, &conv.id, 2, Some(&ids[2])).unwrap();
+        // 游标页返回紧邻游标之前的两条。
+        let page2 = MessageRepo::list_by_conversation(&conn, &conv.id, 2, Some(&ids[3])).unwrap();
         assert_eq!(page2.len(), 2);
-        assert_eq!(page2[0].text(), "msg 0");
-        assert_eq!(page2[1].text(), "msg 1");
+        assert_eq!(page2[0].text(), "msg 1");
+        assert_eq!(page2[1].text(), "msg 2");
+    }
+
+    #[test]
+    fn deletion_semantics_are_explicit() {
+        let pool = setup();
+        let conn = pool.get().unwrap();
+        let conv = ConversationRepo::create(&conn, "openai", "gpt-4o", None, None).unwrap();
+        let messages: Vec<_> = (0..4)
+            .map(|i| {
+                let message = Message::new_user(&conv.id, &format!("msg {i}"));
+                MessageRepo::insert(&conn, &message).unwrap();
+                message
+            })
+            .collect();
+
+        assert_eq!(
+            MessageRepo::truncate_after(&conn, &conv.id, &messages[1].id).unwrap(),
+            2
+        );
+        let remaining = MessageRepo::list_by_conversation(&conn, &conv.id, 10, None).unwrap();
+        assert_eq!(remaining.len(), 2);
+        assert_eq!(remaining[1].id, messages[1].id);
+        assert_eq!(
+            MessageRepo::delete_from_inclusive(&conn, &conv.id, &messages[1].id).unwrap(),
+            1
+        );
+        assert!(MessageRepo::truncate_after(&conn, &conv.id, "missing").is_err());
+    }
+
+    #[test]
+    fn duplicate_message_ids_fail() {
+        let pool = setup();
+        let conn = pool.get().unwrap();
+        let conv = ConversationRepo::create(&conn, "openai", "gpt-4o", None, None).unwrap();
+        let message = Message::new_user(&conv.id, "hello");
+        MessageRepo::insert(&conn, &message).unwrap();
+        assert!(MessageRepo::insert(&conn, &message).is_err());
     }
 
     #[test]

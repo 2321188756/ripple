@@ -31,7 +31,9 @@ pub fn init_db(db_path: &Path) -> StoreResult<DbPool> {
 
     // 迁移只需在任一连接上执行一次
     {
-        let conn = pool.get().map_err(|e| crate::StoreError::Pool(e.to_string()))?;
+        let conn = pool
+            .get()
+            .map_err(|e| crate::StoreError::Pool(e.to_string()))?;
         migration::run_migrations(&conn)?;
     }
 
@@ -48,7 +50,9 @@ pub fn init_memory_db() -> StoreResult<DbPool> {
         .map_err(|e| crate::StoreError::Pool(e.to_string()))?;
 
     {
-        let conn = pool.get().map_err(|e| crate::StoreError::Pool(e.to_string()))?;
+        let conn = pool
+            .get()
+            .map_err(|e| crate::StoreError::Pool(e.to_string()))?;
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA foreign_keys = ON;

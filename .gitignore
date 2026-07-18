@@ -4,8 +4,16 @@ logs/
 ripple.db
 ripple.db-shm
 ripple.db-wal
+.ripple-install-secret
 *.log
 .DS_Store
 Thumbs.db
 src-tauri/target/
+.e2e-data/
+e2e-results/
+.e2e-last.log
+wdio.log
+knowledge-service-data/
+.knowledge-service-smoke/
+.knowledge-service-test-data/
 dailynote/

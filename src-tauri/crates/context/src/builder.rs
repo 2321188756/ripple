@@ -12,9 +12,7 @@
 
 use std::sync::Arc;
 
-use ripple_core::{
-    ChatMessage, ContentBlock, Message, MessageRole,
-};
+use ripple_core::{ChatMessage, ContentBlock, Message, MessageRole};
 
 use crate::counter::TokenCounter;
 use crate::summarizer::Summarizer;
@@ -146,8 +144,7 @@ impl ContextBuilder {
         };
 
         // 5. 按预算裁剪：recent 超预算时从最旧开始丢
-        let (recent_msgs, recent_truncated) =
-            self.fit_recent(recent_msgs, recent_budget);
+        let (recent_msgs, recent_truncated) = self.fit_recent(recent_msgs, recent_budget);
 
         // 6. 统计
         let mut all: Vec<ChatMessage> = Vec::new();
@@ -159,18 +156,16 @@ impl ContextBuilder {
         }
         all.extend(recent_msgs.iter().cloned());
 
-        let total_tokens: usize = all
-            .iter()
-            .map(|m| self.counter.count_message(m))
-            .sum();
+        let total_tokens: usize = all.iter().map(|m| self.counter.count_message(m)).sum();
 
         AssembledContext {
             messages: all,
             total_tokens,
-            truncated: recent_truncated || system_prompt.map_or(false, |s| {
-                // system 被截断也算
-                self.counter.count_text(s) > system_budget
-            }),
+            truncated: recent_truncated
+                || system_prompt.is_some_and(|s| {
+                    // system 被截断也算
+                    self.counter.count_text(s) > system_budget
+                }),
             summary_count: summary_blocks.len(),
         }
     }
@@ -207,8 +202,8 @@ impl ContextBuilder {
                 break; // 无法继续安全丢弃
             }
             let dropped: Vec<ChatMessage> = msgs.drain(..drop_until).collect();
-            total = total
-                .saturating_sub(dropped.iter().map(|m| self.counter.count_message(m)).sum());
+            total =
+                total.saturating_sub(dropped.iter().map(|m| self.counter.count_message(m)).sum());
             truncated = true;
         }
         (msgs, truncated)
@@ -286,7 +281,7 @@ fn truncate_text(text: &str, budget_tokens: usize, counter: &dyn TokenCounter) -
     let mut lo = 0usize;
     let mut hi = chars.len();
     while lo < hi {
-        let mid = (lo + hi + 1) / 2;
+        let mid = (lo + hi).div_ceil(2);
         let sub: String = chars[..mid].iter().collect();
         if counter.count_text(&sub) <= budget_tokens {
             lo = mid;
@@ -341,7 +336,9 @@ mod tests {
         let ctx = b.assemble(None, &history, 100_000, 1000).await;
         assert_eq!(ctx.summary_count, 1); // 2 条历史 / summary_interval=2 = 1 块
         assert!(ctx.messages.iter().any(|m| m.role == "system"
-            && m.content.iter().any(|b| matches!(b, ContentBlock::Text { text } if text.contains("summary")))));
+            && m.content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("summary")))));
     }
 
     #[tokio::test]
@@ -401,10 +398,14 @@ mod tests {
         // tool_result 不应孤立出现在 recent 而其 tool_call 被摘要化
         // 检查 recent 段：若含 ToolResult，必须也含对应 ToolCall
         let recent_has_result = ctx.messages.iter().any(|m| {
-            m.content.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+            m.content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolResult { .. }))
         });
         let recent_has_call = ctx.messages.iter().any(|m| {
-            m.content.iter().any(|b| matches!(b, ContentBlock::ToolCall { .. }))
+            m.content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolCall { .. }))
         });
         // 要么都没有（全进摘要），要么都有（同侧）
         assert_eq!(recent_has_result, recent_has_call);

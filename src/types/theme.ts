@@ -25,8 +25,8 @@ export interface ThemeColors {
 }
 
 export interface AgentThemeStyle {
-  icon_color?: string;
-  border_color?: string;
-  border_width?: number;
-  name_color?: string;
+  iconColor?: string;
+  borderColor?: string;
+  borderWidth?: number;
+  nameColor?: string;
 }

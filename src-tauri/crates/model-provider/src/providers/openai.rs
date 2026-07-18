@@ -72,12 +72,9 @@ impl OpenAiProvider {
         let mut h = HeaderMap::new();
         // 非 ASCII 字符（如粘贴时夹带的隐藏 unicode）会让 from_str 失败。
         // 早期版本静默回退为空 header → 神秘 401；这里改为返回明确错误。
-        let value = header::HeaderValue::from_str(&format!("Bearer {api_key}"))
-            .map_err(|_| {
-                ProviderError::Unsupported(
-                    "API key contains invalid (non-ASCII) characters".into(),
-                )
-            })?;
+        let value = header::HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|_| {
+            ProviderError::Unsupported("API key contains invalid (non-ASCII) characters".into())
+        })?;
         h.insert(header::AUTHORIZATION, value);
         Ok(h)
     }
@@ -109,10 +106,16 @@ impl ModelProvider for OpenAiProvider {
 
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(map_api_error(status.as_u16(), body));
+            let body_bytes = resp.content_length().unwrap_or_default();
+            tracing::warn!(
+                provider = %self.provider_id,
+                operation = "list_models",
+                status = status.as_u16(),
+                response_bytes = body_bytes,
+                "provider request failed"
+            );
+            return Err(map_api_error(status.as_u16()));
         }
-
         let body: ModelsResponse = ptry!(resp.json().await);
         Ok(body
             .data
@@ -143,15 +146,26 @@ impl ModelProvider for OpenAiProvider {
 
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(map_api_error(status.as_u16(), body));
+            let body_bytes = resp.content_length().unwrap_or_default();
+            tracing::warn!(
+                provider = %self.provider_id,
+                operation = "chat",
+                status = status.as_u16(),
+                response_bytes = body_bytes,
+                "provider request failed"
+            );
+            return Err(map_api_error(status.as_u16()));
         }
 
         let resp_body: ChatCompletionResponse = ptry!(resp.json().await);
         Ok(map_non_stream_response(resp_body, &request.model))
     }
 
-    async fn chat_stream(&self, api_key: &str, request: ChatRequest) -> ProviderResult<ChunkStream> {
+    async fn chat_stream(
+        &self,
+        api_key: &str,
+        request: ChatRequest,
+    ) -> ProviderResult<ChunkStream> {
         let body = build_request_body(&request, true);
         let headers = self.auth_headers(api_key)?;
         let resp = ptry!(
@@ -165,29 +179,47 @@ impl ModelProvider for OpenAiProvider {
 
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(map_api_error(status.as_u16(), body));
+            let body_bytes = resp.content_length().unwrap_or_default();
+            tracing::warn!(
+                provider = %self.provider_id,
+                operation = "chat_stream",
+                status = status.as_u16(),
+                response_bytes = body_bytes,
+                "provider request failed"
+            );
+            return Err(map_api_error(status.as_u16()));
         }
 
         // bytes_stream → eventsource 解析 → 映射为 StreamChunk
         use eventsource_stream::Eventsource as _;
         let byte_stream = resp.bytes_stream();
         let event_stream = byte_stream.eventsource();
+        let provider_id = self.provider_id.clone();
         let chunk_stream = event_stream
             .take_while(|item| {
                 let stop = matches!(item, Ok(ev) if ev.data == "[DONE]");
                 futures::future::ready(!stop)
             })
-            .filter_map(|item| async move {
-                match item {
-                    Ok(ev) => match serde_json::from_str::<ChatCompletionChunk>(&ev.data) {
-                        Ok(chunk) => Some(map_stream_chunk(chunk)),
-                        Err(e) => {
-                            warn!(error = %e, data = %ev.data, "failed to parse SSE chunk");
-                            Some(Err(ProviderError::StreamParse(e.to_string())))
-                        }
-                    },
-                    Err(e) => Some(Err(ProviderError::StreamParse(e.to_string()))),
+            .filter_map(move |item| {
+                let provider_id = provider_id.clone();
+                async move {
+                    match item {
+                        Ok(ev) => match serde_json::from_str::<ChatCompletionChunk>(&ev.data) {
+                            Ok(chunk) => Some(map_stream_chunk(chunk)),
+                            Err(e) => {
+                                warn!(
+                                    provider = %provider_id,
+                                    payload_bytes = ev.data.len(),
+                                    error = %e,
+                                    "failed to parse provider SSE chunk"
+                                );
+                                Some(Err(ProviderError::StreamParse(
+                                    "invalid provider stream payload".into(),
+                                )))
+                            }
+                        },
+                        Err(e) => Some(Err(ProviderError::StreamParse(e.to_string()))),
+                    }
                 }
             });
 
@@ -274,8 +306,41 @@ fn build_request_body(request: &ChatRequest, stream: bool) -> serde_json::Value 
         body["stream_options"] = serde_json::json!({ "include_usage": true });
     }
 
-    // debug 模式下记录完整请求体。filter=info 时 tracing 不求值参数，零开销。
-    tracing::debug!(body = %serde_json::to_string(&body).unwrap_or_default(), "request body");
+    let tool_count = request.tools.as_ref().map_or(0, Vec::len);
+    let input_text_chars: usize = request
+        .system_prompt
+        .as_deref()
+        .into_iter()
+        .map(str::chars)
+        .map(Iterator::count)
+        .sum::<usize>()
+        + request
+            .messages
+            .iter()
+            .flat_map(|message| message.content.iter())
+            .map(|block| match block {
+                ContentBlock::Text { text } | ContentBlock::Thinking { text } => {
+                    text.chars().count()
+                }
+                ContentBlock::ToolCall { name, .. } => name.chars().count(),
+                ContentBlock::ToolResult { .. } | ContentBlock::Image { .. } => 0,
+            })
+            .sum::<usize>();
+    let image_count = request
+        .messages
+        .iter()
+        .flat_map(|message| message.content.iter())
+        .filter(|block| matches!(block, ContentBlock::Image { .. }))
+        .count();
+    tracing::debug!(
+        model = %request.model,
+        stream,
+        message_count = request.messages.len(),
+        tool_count,
+        image_count,
+        input_text_chars,
+        "provider request prepared"
+    );
 
     body
 }
@@ -292,14 +357,21 @@ fn message_to_json(msg: &ChatMessage) -> serde_json::Value {
             ContentBlock::Text { text } => {
                 content_parts.push(serde_json::json!({"type": "text", "text": text}));
             }
-            ContentBlock::ToolCall { id, name, arguments } => {
+            ContentBlock::ToolCall {
+                id,
+                name,
+                arguments,
+            } => {
                 tool_calls.push(serde_json::json!({
                     "id": id,
                     "type": "function",
                     "function": { "name": name, "arguments": arguments.to_string() }
                 }));
             }
-            ContentBlock::ToolResult { tool_call_id, content } => {
+            ContentBlock::ToolResult {
+                tool_call_id,
+                content,
+            } => {
                 tool_result = Some((tool_call_id.clone(), content.clone()));
             }
             ContentBlock::Image { url, detail } => {
@@ -315,7 +387,9 @@ fn message_to_json(msg: &ChatMessage) -> serde_json::Value {
         }
     }
 
-    let has_images = content_parts.iter().any(|v| v.get("type").and_then(|t| t.as_str()) == Some("image_url"));
+    let has_images = content_parts
+        .iter()
+        .any(|v| v.get("type").and_then(|t| t.as_str()) == Some("image_url"));
 
     if role == "tool" {
         let (tool_call_id, content) = tool_result.unwrap_or_default();
@@ -327,7 +401,8 @@ fn message_to_json(msg: &ChatMessage) -> serde_json::Value {
     }
 
     if !tool_calls.is_empty() {
-        let content_str: String = content_parts.iter()
+        let content_str: String = content_parts
+            .iter()
             .filter_map(|v| v.get("text").and_then(|t| t.as_str()))
             .collect();
         return serde_json::json!({
@@ -343,7 +418,8 @@ fn message_to_json(msg: &ChatMessage) -> serde_json::Value {
     }
 
     // Default: plain text
-    let text: String = content_parts.iter()
+    let text: String = content_parts
+        .iter()
         .filter_map(|v| v.get("text").and_then(|t| t.as_str()))
         .collect();
     serde_json::json!({ "role": role, "content": text })
@@ -385,9 +461,7 @@ fn map_non_stream_response(resp: ChatCompletionResponse, model: &str) -> ChatRes
         content,
         model: model.into(),
         usage: resp.usage.map(UsageInfo::from).unwrap_or_default(),
-        finish_reason: choice
-            .and_then(|c| c.finish_reason)
-            .unwrap_or_default(),
+        finish_reason: choice.and_then(|c| c.finish_reason).unwrap_or_default(),
     }
 }
 
@@ -434,12 +508,48 @@ fn map_stream_chunk(chunk: ChatCompletionChunk) -> ProviderResult<StreamChunk> {
 
     Ok(out)
 }
-
-fn map_api_error(status: u16, body: String) -> ProviderError {
+fn map_api_error(status: u16) -> ProviderError {
     match status {
         401 | 403 => ProviderError::InvalidApiKey,
         429 => ProviderError::RateLimited,
-        _ => ProviderError::Api { status, body },
+        _ => ProviderError::Api { status },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_request_logs_only_metadata() {
+        let secret = "SENTINEL_SECRET_DO_NOT_LOG";
+        let request = ChatRequest {
+            model: "test-model".into(),
+            messages: vec![ChatMessage::user(secret)],
+            system_prompt: Some(secret.into()),
+            tools: None,
+            temperature: None,
+            max_tokens: None,
+            top_p: None,
+            stop_sequences: None,
+        };
+
+        let body = build_request_body(&request, true);
+        assert_eq!(body["messages"][0]["content"], secret);
+        assert_eq!(body["messages"][1]["content"], secret);
+        assert!(matches!(
+            map_api_error(500),
+            ProviderError::Api { status: 500 }
+        ));
+    }
+
+    #[test]
+    fn provider_error_never_contains_response_body() {
+        let error = map_api_error(500).to_string();
+        assert_eq!(error, "api request failed (status 500)");
+        assert!(!error.contains("SENTINEL_SECRET_DO_NOT_LOG"));
+        assert!(matches!(map_api_error(401), ProviderError::InvalidApiKey));
+        assert!(matches!(map_api_error(429), ProviderError::RateLimited));
     }
 }
 

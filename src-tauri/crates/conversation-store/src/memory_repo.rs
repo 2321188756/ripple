@@ -18,7 +18,7 @@ pub struct MemoryChunk {
     pub chunk_index: i64,
     pub content: String,
     pub embedding_json: Option<String>,
-    pub tags: String,          // JSON 数组：[{"t":"tag","w":1},...]（t=标签名，w=权重）
+    pub tags: String, // JSON 数组：[{"t":"tag","w":1},...]（t=标签名，w=权重）
     pub created_at: String,
     pub updated_at: String,
 }
@@ -95,8 +95,11 @@ impl MemoryRepo {
         conn: &PooledConnection<SqliteConnectionManager>,
         agent_id: &str,
     ) -> StoreResult<()> {
-        conn.execute("DELETE FROM memories WHERE agent_id = ?1", params![agent_id])
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+        conn.execute(
+            "DELETE FROM memories WHERE agent_id = ?1",
+            params![agent_id],
+        )
+        .map_err(|e| StoreError::Database(e.to_string()))?;
         Ok(())
     }
 
@@ -173,10 +176,13 @@ impl MemoryRepo {
                 updated_at: r.get(9)?,
             })
         };
-        let rows = stmt.query_map(params![agent_id], row_fn)
+        let rows = stmt
+            .query_map(params![agent_id], row_fn)
             .map_err(|e| StoreError::Database(e.to_string()))?;
         let mut out: Vec<MemoryChunk> = Vec::new();
-        for row in rows.flatten() { out.push(row); }
+        for row in rows.flatten() {
+            out.push(row);
+        }
         Ok(out)
     }
 
@@ -205,7 +211,8 @@ impl MemoryRepo {
                 updated_at: r.get(9)?,
             })
         };
-        let rows = stmt.query_map(params![file_path, exclude_id], row_fn)
+        let rows = stmt
+            .query_map(params![file_path, exclude_id], row_fn)
             .map_err(|e| StoreError::Database(e.to_string()))?;
         let mut out = Vec::new();
         for row in rows.flatten() {
@@ -234,12 +241,15 @@ impl MemoryRepo {
              FROM memories WHERE agent_id = ?1 AND ({})",
             conditions.join(" OR "),
         );
-        let mut stmt = conn.prepare(&sql).map_err(|e| StoreError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(agent_id.to_string())];
         for kw in keywords {
             params.push(Box::new(format!("%{}%", kw)));
         }
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
         let row_fn = |r: &rusqlite::Row| {
             Ok(MemoryChunk {
                 id: r.get(0)?,
@@ -255,28 +265,35 @@ impl MemoryRepo {
             })
         };
         let mut results: Vec<(MemoryChunk, usize)> = Vec::new();
-        for row in stmt.query_map(param_refs.as_slice(), row_fn)
+        for row in stmt
+            .query_map(param_refs.as_slice(), row_fn)
             .map_err(|e| StoreError::Database(e.to_string()))?
             .flatten()
         {
             // 解析 tags JSON → [{"t":"","w":N}]
-            let weight: usize = if let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(&row.tags) {
-                parsed.iter().filter_map(|v| {
-                    let tag = v.get("t").and_then(|t| t.as_str())?;
-                    let w = v.get("w").and_then(|w| w.as_u64()).unwrap_or(1) as usize;
-                    // 匹配任一词则累加权重
-                    keywords.iter().any(|kw| tag.contains(*kw)).then_some(w)
-                }).sum()
-            } else {
-                0
-            };
+            let weight: usize =
+                if let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(&row.tags) {
+                    parsed
+                        .iter()
+                        .filter_map(|v| {
+                            let tag = v.get("t").and_then(|t| t.as_str())?;
+                            let w = v.get("w").and_then(|w| w.as_u64()).unwrap_or(1) as usize;
+                            // 匹配任一词则累加权重
+                            keywords.iter().any(|kw| tag.contains(*kw)).then_some(w)
+                        })
+                        .sum()
+                } else {
+                    0
+                };
             if weight > 0 {
                 results.push((row, weight));
             }
         }
         // 按权重降序
-        results.sort_by(|a, b| b.1.cmp(&a.1));
-        if results.len() > limit { results.truncate(limit); }
+        results.sort_by_key(|entry| std::cmp::Reverse(entry.1));
+        if results.len() > limit {
+            results.truncate(limit);
+        }
         Ok(results)
     }
 
@@ -307,10 +324,13 @@ impl MemoryRepo {
                 updated_at: r.get(9)?,
             })
         };
-        let rows = stmt.query_map(params![agent_id, limit as i64], row_fn)
+        let rows = stmt
+            .query_map(params![agent_id, limit as i64], row_fn)
             .map_err(|e| StoreError::Database(e.to_string()))?;
         let mut out: Vec<MemoryChunk> = Vec::new();
-        for row in rows.flatten() { out.push(row); }
+        for row in rows.flatten() {
+            out.push(row);
+        }
         Ok(out)
     }
 }

@@ -1,5 +1,16 @@
 import { invokeWithTimeout } from "./invoke";
 import type { ThemeDefinition } from "@/types/theme";
+import { validateThemeContrast, type ThemeValidationWarning } from "@/lib/theme-contrast";
+
+export type PreparedTheme = {
+  theme: ThemeDefinition;
+  warnings: ThemeValidationWarning[];
+};
+
+/** Validates and corrects a theme before the UI persists it. */
+export function prepareThemeForSave(theme: ThemeDefinition): PreparedTheme {
+  return validateThemeContrast(theme);
+}
 
 export const themeService = {
   /** 获取所有主题 */

@@ -6,6 +6,15 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e:native": "cross-env RIPPLE_DATA_DIR=.e2e-data wdio run ./wdio.conf.ts",
+    "build:e2e:native": "cross-env VITE_RIPPLE_E2E=true npm run build && cargo build --manifest-path src-tauri/Cargo.toml --release --features custom-protocol,e2e",
+    "check": "npm run typecheck && npm run test && npm run build",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --workspace",
+    "lint:rust": "cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets -- -D warnings",
+    "fmt:rust:check": "cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check",
     "preview": "vite preview",
     "tauri": "tauri"
   },
@@ -48,13 +57,35 @@
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.20",
     "@tauri-apps/cli": "^2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/react-dom": "^19.2.3",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@vitejs/plugin-react": "^4.0.0",
+    "@wdio/cli": "^9.29.1",
+    "@wdio/local-runner": "^9.29.1",
+    "@wdio/mocha-framework": "^9.29.1",
+    "@wdio/native-utils": "^2.5.0",
+    "@wdio/spec-reporter": "^9.29.1",
+    "@wdio/tauri-plugin": "^1.2.0",
+    "@wdio/tauri-service": "^1.2.0",
     "autoprefixer": "^10.4.0",
+    "cross-env": "^10.1.0",
+    "jsdom": "^26.1.0",
     "postcss": "^8.4.0",
     "tailwindcss": "^3.4.0",
     "typescript": "^5.5.0",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "vitest": "^3.2.7",
+    "webdriverio": "^9.29.1"
+  },
+  "overrides": {
+    "@wdio/tauri-service": {
+      "@wdio/native-utils": "2.5.0"
+    },
+    "@wdio/native-core": {
+      "@wdio/native-utils": "2.5.0"
+    }
   }
 }

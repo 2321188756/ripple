@@ -308,7 +308,11 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> StoreResult<()> {
     .map_err(|e| crate::StoreError::Database(e.to_string()))?;
 
     let current: u32 = conn
-        .query_row("SELECT COALESCE(MAX(version), 0) FROM schema_version", [], |r| r.get(0))
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+            [],
+            |r| r.get(0),
+        )
         .unwrap_or(0);
 
     for (version, sql) in MIGRATIONS {

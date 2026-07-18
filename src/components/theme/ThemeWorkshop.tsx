@@ -8,11 +8,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { ThemeCard } from "./ThemeCard";
 import { AiThemeDialog } from "./AiThemeDialog";
-import { themeService } from "@/services/theme.service";
+import { themeService, prepareThemeForSave } from "@/services/theme.service";
 import { useTheme } from "@/hooks/useTheme";
 import type { ThemeDefinition } from "@/types/theme";
 
-const ACTIVE_THEME_KEY = "ripple-active-theme-id";
 
 interface ThemeWorkshopProps {
   open: boolean;
@@ -23,12 +22,9 @@ interface ThemeWorkshopProps {
 export function ThemeWorkshop({ open, onOpenChange }: ThemeWorkshopProps) {
   const [themes, setThemes] = useState<ThemeDefinition[]>([]);
   const [loading, setLoading] = useState(false);
-  const [activeId, setActiveId] = useState(
-    () => localStorage.getItem(ACTIVE_THEME_KEY) || "default-light",
-  );
   const [aiOpen, setAiOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const { applyCustomTheme, isDark } = useTheme();
+  const { applyCustomTheme, isDark, activeThemeId, refreshActiveTheme } = useTheme();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -47,7 +43,9 @@ export function ThemeWorkshop({ open, onOpenChange }: ThemeWorkshopProps) {
       return;
     }
     try {
-      await themeService.importTheme(path);
+      const imported = await themeService.importTheme(path);
+      const { warnings } = prepareThemeForSave(imported);
+      if (warnings.length) alert(warnings.map((warning) => warning.message).join("\n"));
       await load();
     } catch (e) { alert(`导入失败: ${e}`); }
   }, [load]);
@@ -71,7 +69,6 @@ export function ThemeWorkshop({ open, onOpenChange }: ThemeWorkshopProps) {
 
   const handleApply = useCallback(async (theme: ThemeDefinition) => {
     await applyCustomTheme(theme);
-    setActiveId(theme.id);
   }, [applyCustomTheme]);
 
   /** 设置壁纸：选图片 -> 复制到壁纸目录 -> 更新主题 -> 同步显示壁纸 */
@@ -86,24 +83,15 @@ export function ThemeWorkshop({ open, onOpenChange }: ThemeWorkshopProps) {
       const all = await themeService.list();
       const idx = all.findIndex((t) => t.id === theme.id);
       if (idx >= 0) {
-        all[idx] = { ...all[idx], wallpaper: wpPath };
+        all[idx] = prepareThemeForSave({ ...all[idx], wallpaper: wpPath }).theme;
         await themeService.saveAll(all);
         await load();
-        // 同步读取壁纸并显示（await 确保画上去后再返回，不依赖 applyThemeVars 的异步）
-        if (theme.id === activeId) {
-          const updated = all[idx];
-          applyCustomTheme(updated);
-          // Mica 磨砂：壁纸在 html 层
-          const dataUrl = await themeService.readWallpaperBase64(wpPath);
-          document.body.style.backgroundImage = `url(${dataUrl})`;
-          document.body.style.backgroundSize = "cover";
-          document.body.style.backgroundPosition = "center";
-          document.body.style.backgroundAttachment = "fixed";
-          document.body.classList.add("has-wallpaper");
+        if (theme.id === activeThemeId) {
+          await refreshActiveTheme();
         }
       }
     } catch (e) { alert(`设置壁纸失败: ${e}`); }
-  }, [activeId, applyCustomTheme, load]);
+  }, [activeThemeId, load, refreshActiveTheme]);
 
   const handleExport = useCallback(async (theme: ThemeDefinition) => {
     const path = await saveDialog({
@@ -126,7 +114,7 @@ export function ThemeWorkshop({ open, onOpenChange }: ThemeWorkshopProps) {
 
   const handleDelete = useCallback(async (theme: ThemeDefinition) => {
     if (theme.isBuiltin) return;
-    if (theme.id === activeId) {
+    if (theme.id === activeThemeId) {
       alert("正在使用的主题不可删除，请先切换到其他主题");
       return;
     }
@@ -135,7 +123,7 @@ export function ThemeWorkshop({ open, onOpenChange }: ThemeWorkshopProps) {
       await themeService.deleteTheme(theme.id);
       await load();
     } catch (e) { alert(`删除失败: ${e}`); }
-  }, [activeId, load]);
+  }, [activeThemeId, load]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -180,7 +168,7 @@ export function ThemeWorkshop({ open, onOpenChange }: ThemeWorkshopProps) {
                   <ThemeCard
                     key={t.id}
                     theme={t}
-                    isActive={t.id === activeId}
+                    isActive={t.id === activeThemeId}
                     isDark={isDark}
                     onApply={handleApply}
                     onExport={handleExport}
@@ -191,16 +179,16 @@ export function ThemeWorkshop({ open, onOpenChange }: ThemeWorkshopProps) {
               </div>
             )}
 
-            {/* Mica 磨砂提示：有壁纸的主题自动使用 backdrop-filter 模糊效果，无需遮罩层 */}
+            {/* 壁纸阅读层提示：壁纸存在时使用更强的 token 化磨砂与内容洗底，保证可读性。 */}
             {(() => {
-              const active = themes.find((t) => t.id === activeId);
+              const active = themes.find((t) => t.id === activeThemeId);
               if (!active?.wallpaper) return null;
               return (
                 <div className="mt-4 p-3 rounded-lg border border-border bg-card/70">
-                  <div className="text-xs font-medium mb-2">壁纸已启用 (Mica 磨砂)</div>
+                  <div className="text-xs font-medium mb-2">壁纸已启用（可读性保护）</div>
                   <p className="text-[10px] text-muted-foreground">
-                    侧边栏、头部、输入区等大面积表面使用 <code className="text-primary">backdrop-filter: blur(40px)</code> 磨砂玻璃效果。
-                    壁纸以模糊染色形式均匀透过，无需半透明 UI 或遮罩层，文字依然清晰可读。
+                    侧边栏、头部与输入区会使用 token 化的高不透明度磨砂层；消息区保留独立阅读底色，
+                    让壁纸可见但不会干扰文字、边框和焦点状态。
                   </p>
                 </div>
               );

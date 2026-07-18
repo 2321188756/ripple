@@ -32,32 +32,47 @@ export type ContentBlock =
 
 // IPC 事件载荷
 export interface StreamChunkPayload {
+  contract_version: 1;
+  stream_id: string;
   conversation_id: string;
   message_id: string;
+  seq: number;
   delta_text: string | null;
   finish_reason: string | null;
 }
 
 export interface GenCompletePayload {
+  contract_version: 1;
+  stream_id: string;
   conversation_id: string;
   message_id: string;
+  seq: number;
+  outcome: "completed" | "cancelled";
+  finish_reason: string | null;
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 }
 
 export interface GenErrorPayload {
+  contract_version: 1;
+  stream_id: string;
   conversation_id: string;
   message_id: string;
+  seq: number;
   error: string;
 }
 
 // 工具调用事件（chat:tool-call 载荷，对齐后端 commands/chat.rs 的 payload）
 export interface ToolCallEvent {
+  contract_version: 1;
+  stream_id: string;
+  conversation_id: string;
+  message_id: string;
+  seq: number;
+  tool_call_id: string;
   tool_name: string;
-  tool_input: string;
+  tool_input: unknown;
   tool_output: string;
   status: "success" | "error" | "rejected";
-  /** 触发此工具调用的 assistant 消息 ID */
-  message_id: string;
 }
 
 // 工具审批请求（chat:tool-approval-request 载荷）

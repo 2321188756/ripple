@@ -1,5 +1,39 @@
 import { invoke } from "./invoke";
-import type { PluginManifest } from "@/types";
+
+export interface PluginTool {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+export type PluginConfigValue = string | number | boolean;
+
+export interface PluginConfigProperty {
+  type?: "string" | "number" | "integer" | "boolean";
+  description?: string;
+  default?: PluginConfigValue;
+  enum?: PluginConfigValue[];
+  format?: string;
+  sensitive?: boolean;
+  writeOnly?: boolean;
+}
+
+export interface PluginManifest {
+  name: string;
+  version: string;
+  mode?: "tool" | "transform" | "daemon";
+  runtime?: "rhai" | "node" | "python" | "py" | "shell" | "bash";
+  description?: string;
+  author?: string;
+  permissions?: string[];
+  tools?: PluginTool[];
+  enabled: boolean;
+  config_schema?: {
+    type?: "object";
+    properties?: Record<string, PluginConfigProperty>;
+    required?: string[];
+  };
+}
 
 export const pluginService = {
   list: (): Promise<PluginManifest[]> =>

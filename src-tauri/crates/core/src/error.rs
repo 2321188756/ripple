@@ -32,8 +32,8 @@ pub enum ProviderError {
     #[error("network error: {0}")]
     Network(String),
 
-    #[error("api error (status {status}): {body}")]
-    Api { status: u16, body: String },
+    #[error("api request failed (status {status})")]
+    Api { status: u16 },
 
     #[error("invalid api key")]
     InvalidApiKey,

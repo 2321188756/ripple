@@ -78,6 +78,7 @@ pub async fn run_once(
                 extracted.extractor_id,
                 extracted.extractor_version,
                 &extracted.warnings,
+                &extracted.segments,
                 &chunks,
             )
             .await

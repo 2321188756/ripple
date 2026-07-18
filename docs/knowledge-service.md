@@ -21,7 +21,10 @@ Credentials are random opaque values. The service persists only SHA-256 digests 
 
 Every response includes `x-request-id`. Errors use a versioned JSON envelope and deliberately omit database URLs, credentials, SQL errors, source text, prompts, and provider output.
 
-Upload, folder-sync, URL-import, retrieval, and desktop login integration remain future phases.
+- `POST /api/v1/sources/upload-multipart` — authenticated bounded multipart upload with `collection_id`, `display_name`, `mime_type`, and `content` fields. File content is streamed into the service-owned object store, capped at 10 MiB, hashed incrementally, and committed atomically. Metadata fields must precede `content`; duplicate or unknown fields are rejected.
+- `POST /api/v1/sources/upload` — compatibility Base64 upload; prefer multipart for new clients and keep payloads within the same service limits.
+
+Ingestion extracts supported text, Markdown, JSON, XML, YAML, TOML, JavaScript, and code-like MIME types into normalized UTF-8. Each extracted document records non-empty line segments with character offsets and Markdown heading paths. These provenance records are stored with the immutable source revision and are the basis for future page-aware PDF/HTML citations. PDF and HTML adapters remain future phases.
 
 ## Local development prerequisites
 

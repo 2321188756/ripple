@@ -727,6 +727,7 @@ impl KnowledgeStore {
         extractor_id: &str,
         extractor_version: &str,
         warnings: &[&str],
+        extracted_segments: &[ripple_knowledge_ingest::DocumentSegment],
         chunks: &[ripple_knowledge_ingest::TextChunk],
     ) -> Result<(), KnowledgeError> {
         let mut tx = self
@@ -756,6 +757,21 @@ impl KnowledgeStore {
             .execute(&mut *tx)
             .await
             .map_err(|_| KnowledgeError::Internal)?;
+        for segment in extracted_segments {
+            sqlx::query("INSERT INTO document_segments (id, document_id, source_revision_id, ordinal, char_start, char_end, line_start, line_end, heading_path) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)")
+                .bind(Uuid::new_v4())
+                .bind(document_id)
+                .bind(job.revision_id)
+                .bind(segment.ordinal)
+                .bind(segment.char_start)
+                .bind(segment.char_end)
+                .bind(segment.line_start)
+                .bind(segment.line_end)
+                .bind(serde_json::to_value(&segment.heading_path).map_err(|_| KnowledgeError::Internal)?)
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| KnowledgeError::Internal)?;
+        }
         let chunk_ids: Vec<Uuid> = chunks.iter().map(|_| Uuid::new_v4()).collect();
         for (index, chunk) in chunks.iter().enumerate() {
             let predecessor = index.checked_sub(1).map(|previous| chunk_ids[previous]);

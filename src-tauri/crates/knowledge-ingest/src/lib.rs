@@ -93,52 +93,53 @@ impl ObjectStore for LocalObjectStore {
             .await
             .map_err(|_| ObjectStoreError::Storage)?;
         let temporary = temporary_root.join(format!("upload-{}.tmp", uuid::Uuid::new_v4()));
-        let mut file = fs::File::create(&temporary)
-            .await
-            .map_err(|_| ObjectStoreError::Storage)?;
-        let mut hasher = Sha256::new();
-        let mut byte_size = 0u64;
-        while let Some(chunk) = futures::StreamExt::next(&mut stream).await {
-            let chunk = chunk.map_err(|_| ObjectStoreError::Storage)?;
-            byte_size = byte_size
-                .checked_add(chunk.len() as u64)
-                .ok_or(ObjectStoreError::TooLarge)?;
-            if byte_size > max_bytes {
-                let _ = fs::remove_file(&temporary).await;
-                return Err(ObjectStoreError::TooLarge);
-            }
-            hasher.update(&chunk);
-            file.write_all(&chunk)
+        let result = async {
+            let mut file = fs::File::create(&temporary)
                 .await
                 .map_err(|_| ObjectStoreError::Storage)?;
-        }
-        file.sync_all()
-            .await
-            .map_err(|_| ObjectStoreError::Storage)?;
-        drop(file);
-        let digest: [u8; 32] = hasher.finalize().into();
-        let hash = hex::encode(digest);
-        let key = format!("{organization_scope}/sha256/{}/{hash}", &hash[..2]);
-        let path = self.path_for(&key).ok_or(ObjectStoreError::Storage)?;
-        let parent = path.parent().ok_or(ObjectStoreError::Storage)?;
-        fs::create_dir_all(parent)
-            .await
-            .map_err(|_| ObjectStoreError::Storage)?;
-        match fs::rename(&temporary, &path).await {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                let _ = fs::remove_file(&temporary).await;
+            let mut hasher = Sha256::new();
+            let mut byte_size = 0u64;
+            while let Some(chunk) = futures::StreamExt::next(&mut stream).await {
+                let chunk = chunk.map_err(|_| ObjectStoreError::Storage)?;
+                byte_size = byte_size
+                    .checked_add(chunk.len() as u64)
+                    .ok_or(ObjectStoreError::TooLarge)?;
+                if byte_size > max_bytes {
+                    return Err(ObjectStoreError::TooLarge);
+                }
+                hasher.update(&chunk);
+                file.write_all(&chunk)
+                    .await
+                    .map_err(|_| ObjectStoreError::Storage)?;
             }
-            Err(_) => {
-                let _ = fs::remove_file(&temporary).await;
-                return Err(ObjectStoreError::Storage);
+            file.sync_all()
+                .await
+                .map_err(|_| ObjectStoreError::Storage)?;
+            drop(file);
+            let digest: [u8; 32] = hasher.finalize().into();
+            let hash = hex::encode(digest);
+            let key = format!("{organization_scope}/sha256/{}/{hash}", &hash[..2]);
+            let path = self.path_for(&key).ok_or(ObjectStoreError::Storage)?;
+            let parent = path.parent().ok_or(ObjectStoreError::Storage)?;
+            fs::create_dir_all(parent)
+                .await
+                .map_err(|_| ObjectStoreError::Storage)?;
+            match fs::rename(&temporary, &path).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(_) => return Err(ObjectStoreError::Storage),
             }
+            Ok(StoredObject {
+                key,
+                sha256: digest,
+                byte_size,
+            })
         }
-        Ok(StoredObject {
-            key,
-            sha256: digest,
-            byte_size,
-        })
+        .await;
+        if fs::try_exists(&temporary).await.unwrap_or(false) {
+            let _ = fs::remove_file(&temporary).await;
+        }
+        result
     }
 
     async fn put_bytes(
@@ -208,12 +209,23 @@ impl ObjectStore for LocalObjectStore {
 }
 
 #[derive(Debug, Clone)]
+pub struct DocumentSegment {
+    pub ordinal: i32,
+    pub char_start: i32,
+    pub char_end: i32,
+    pub line_start: i32,
+    pub line_end: i32,
+    pub heading_path: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ExtractedText {
     pub title: String,
     pub normalized_text: String,
     pub extractor_id: &'static str,
     pub extractor_version: &'static str,
     pub warnings: Vec<&'static str>,
+    pub segments: Vec<DocumentSegment>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -270,13 +282,49 @@ pub fn extract_text(
         return Err(ExtractionError::Empty);
     }
     let title = display_name.trim();
+    let segments = build_segments(&normalized_text);
     Ok(ExtractedText {
         title: if title.is_empty() { "Untitled" } else { title }.to_owned(),
         normalized_text,
         extractor_id: "ripple.plain-text",
-        extractor_version: "1",
+        extractor_version: "2",
         warnings: Vec::new(),
+        segments,
     })
+}
+
+fn build_segments(text: &str) -> Vec<DocumentSegment> {
+    let mut segments = Vec::new();
+    let mut offset = 0usize;
+    let mut heading_path = Vec::<String>::new();
+    for (index, line) in text.split_inclusive('\n').enumerate() {
+        let content = line.trim_end_matches('\n');
+        if content.trim().is_empty() {
+            offset += line.len();
+            continue;
+        }
+        let trimmed = content.trim();
+        if trimmed.starts_with('#') {
+            let level = trimmed.chars().take_while(|c| *c == '#').count().min(6);
+            let heading = trimmed.trim_start_matches('#').trim().to_owned();
+            heading_path.truncate(level.saturating_sub(1));
+            if !heading.is_empty() {
+                heading_path.push(heading);
+            }
+        }
+        let start = offset as i32;
+        let end = (offset + content.len()) as i32;
+        segments.push(DocumentSegment {
+            ordinal: index as i32,
+            char_start: start,
+            char_end: end,
+            line_start: index as i32 + 1,
+            line_end: index as i32 + 1,
+            heading_path: heading_path.clone(),
+        });
+        offset += line.len();
+    }
+    segments
 }
 
 #[derive(Debug, Clone)]
@@ -381,6 +429,8 @@ mod tests {
         assert_eq!(extracted.title, "guide.md");
         assert_eq!(extracted.normalized_text, "# Title\n\nBody\nLine");
         assert_eq!(extracted.extractor_id, "ripple.plain-text");
+        assert_eq!(extracted.segments[1].line_start, 3);
+        assert_eq!(extracted.segments[1].heading_path, vec!["Title"]);
     }
 
     #[test]

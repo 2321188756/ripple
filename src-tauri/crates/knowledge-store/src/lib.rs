@@ -904,25 +904,154 @@ impl KnowledgeStore {
             .begin()
             .await
             .map_err(|_| KnowledgeError::DatabaseUnavailable)?;
-        let source_id = Uuid::new_v4();
-        let revision_id = Uuid::new_v4();
-        let job_id = Uuid::new_v4();
-        let now = Utc::now();
-        let identity_key = hex::encode(sha256);
-        let mut dedupe_material = Vec::with_capacity(48);
-        dedupe_material.extend_from_slice(source_id.as_bytes());
-        dedupe_material.extend_from_slice(sha256);
-        let dedupe_key = Sha256::digest(dedupe_material).to_vec();
         sqlx::query("INSERT INTO object_blobs (object_key, organization_id, sha256, byte_size) VALUES ($1,$2,$3,$4) ON CONFLICT (object_key) DO NOTHING")
-            .bind(object_key).bind(scope.organization_id).bind(sha256.as_slice()).bind(byte_size as i64).execute(&mut *tx).await.map_err(|_| KnowledgeError::Internal)?;
-        sqlx::query("INSERT INTO sources (id, collection_id, kind, identity_key, display_name, state, created_by) VALUES ($1,$2,'upload',$3,$4,'active',$5)")
-            .bind(source_id).bind(collection_id).bind(identity_key).bind(display_name.trim()).bind(scope.user_id).execute(&mut *tx).await.map_err(|_| KnowledgeError::Conflict)?;
-        sqlx::query("INSERT INTO source_revisions (id, source_id, content_sha256, byte_size, mime_type, original_object_key, state) VALUES ($1,$2,$3,$4,$5,$6,'pending')")
-            .bind(revision_id).bind(source_id).bind(sha256.as_slice()).bind(byte_size as i64).bind(mime_type.trim()).bind(object_key).execute(&mut *tx).await.map_err(|_| KnowledgeError::Internal)?;
-        sqlx::query("INSERT INTO ingestion_jobs (id, collection_id, source_id, revision_id, kind, dedupe_key, state, correlation_id, progress_total) VALUES ($1,$2,$3,$4,'ingest_revision',$5,'queued',$6,$7)")
-            .bind(job_id).bind(collection_id).bind(source_id).bind(revision_id).bind(dedupe_key).bind(request_id).bind(byte_size as i64).execute(&mut *tx).await.map_err(|_| KnowledgeError::Internal)?;
-        sqlx::query("INSERT INTO ingestion_job_events (id, job_id, state, progress_current, progress_total, correlation_id) VALUES ($1,$2,'queued',0,$3,$4)")
-            .bind(Uuid::new_v4()).bind(job_id).bind(byte_size as i64).bind(request_id).execute(&mut *tx).await.map_err(|_| KnowledgeError::Internal)?;
+            .bind(object_key)
+            .bind(scope.organization_id)
+            .bind(sha256.as_slice())
+            .bind(byte_size as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| KnowledgeError::Internal)?;
+        let identity_key = normalize_source_identity(display_name);
+        let source_lock_key = format!("{collection_id}:upload:{identity_key}");
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(source_lock_key)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| KnowledgeError::Internal)?;
+        let existing_source = sqlx::query(
+            "SELECT id, active_revision_id, state, created_at FROM sources WHERE collection_id = $1 AND kind = 'upload' AND identity_key = $2 FOR UPDATE",
+        )
+        .bind(collection_id)
+        .bind(&identity_key)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| KnowledgeError::Internal)?;
+
+        let (source_id, active_revision_id, source_state, source_created_at) = match existing_source
+        {
+            Some(row) => (
+                row.try_get("id").map_err(|_| KnowledgeError::Internal)?,
+                row.try_get("active_revision_id")
+                    .map_err(|_| KnowledgeError::Internal)?,
+                row.try_get::<String, _>("state")
+                    .map_err(|_| KnowledgeError::Internal)?,
+                row.try_get("created_at")
+                    .map_err(|_| KnowledgeError::Internal)?,
+            ),
+            None => {
+                let source_id = Uuid::new_v4();
+                let created_at: DateTime<Utc> = sqlx::query_scalar("INSERT INTO sources (id, collection_id, kind, identity_key, display_name, state, created_by) VALUES ($1,$2,'upload',$3,$4,'active',$5) RETURNING created_at")
+                    .bind(source_id)
+                    .bind(collection_id)
+                    .bind(&identity_key)
+                    .bind(display_name.trim())
+                    .bind(scope.user_id)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|_| KnowledgeError::Conflict)?;
+                (source_id, None, "active".to_owned(), created_at)
+            }
+        };
+
+        if source_state == "deleted" {
+            return Err(KnowledgeError::Conflict);
+        }
+        sqlx::query(
+            "UPDATE sources SET display_name = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+        )
+        .bind(display_name.trim())
+        .bind(source_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| KnowledgeError::Internal)?;
+
+        let existing_revision = sqlx::query(
+            "SELECT id, state FROM source_revisions WHERE source_id = $1 AND content_sha256 = $2",
+        )
+        .bind(source_id)
+        .bind(sha256.as_slice())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| KnowledgeError::Internal)?;
+
+        let (revision_id, job_id, job_state, progress_current, progress_total, job_created_at) =
+            match existing_revision {
+                Some(row) => {
+                    let revision_id: Uuid =
+                        row.try_get("id").map_err(|_| KnowledgeError::Internal)?;
+                    let existing_job = sqlx::query("SELECT id, state, progress_current, progress_total, created_at FROM ingestion_jobs WHERE revision_id = $1 ORDER BY created_at DESC LIMIT 1")
+                        .bind(revision_id)
+                        .fetch_optional(&mut *tx)
+                        .await
+                        .map_err(|_| KnowledgeError::Internal)?
+                        .ok_or(KnowledgeError::Internal)?;
+                    (
+                        revision_id,
+                        existing_job
+                            .try_get("id")
+                            .map_err(|_| KnowledgeError::Internal)?,
+                        existing_job
+                            .try_get("state")
+                            .map_err(|_| KnowledgeError::Internal)?,
+                        existing_job
+                            .try_get("progress_current")
+                            .map_err(|_| KnowledgeError::Internal)?,
+                        existing_job
+                            .try_get("progress_total")
+                            .map_err(|_| KnowledgeError::Internal)?,
+                        existing_job
+                            .try_get("created_at")
+                            .map_err(|_| KnowledgeError::Internal)?,
+                    )
+                }
+                None => {
+                    let revision_id = Uuid::new_v4();
+                    let job_id = Uuid::new_v4();
+                    let created_at = Utc::now();
+                    let mut dedupe_material = Vec::with_capacity(48);
+                    dedupe_material.extend_from_slice(source_id.as_bytes());
+                    dedupe_material.extend_from_slice(sha256);
+                    let dedupe_key = Sha256::digest(dedupe_material).to_vec();
+                    sqlx::query("INSERT INTO source_revisions (id, source_id, content_sha256, byte_size, mime_type, original_object_key, state) VALUES ($1,$2,$3,$4,$5,$6,'pending')")
+                        .bind(revision_id)
+                        .bind(source_id)
+                        .bind(sha256.as_slice())
+                        .bind(byte_size as i64)
+                        .bind(mime_type.trim())
+                        .bind(object_key)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|_| KnowledgeError::Internal)?;
+                    sqlx::query("INSERT INTO ingestion_jobs (id, collection_id, source_id, revision_id, kind, dedupe_key, state, correlation_id, progress_total) VALUES ($1,$2,$3,$4,'ingest_revision',$5,'queued',$6,$7)")
+                        .bind(job_id)
+                        .bind(collection_id)
+                        .bind(source_id)
+                        .bind(revision_id)
+                        .bind(dedupe_key)
+                        .bind(request_id)
+                        .bind(byte_size as i64)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|_| KnowledgeError::Internal)?;
+                    sqlx::query("INSERT INTO ingestion_job_events (id, job_id, state, progress_current, progress_total, correlation_id) VALUES ($1,$2,'queued',0,$3,$4)")
+                        .bind(Uuid::new_v4())
+                        .bind(job_id)
+                        .bind(byte_size as i64)
+                        .bind(request_id)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|_| KnowledgeError::Internal)?;
+                    (
+                        revision_id,
+                        job_id,
+                        "queued".to_owned(),
+                        0,
+                        Some(byte_size as i64),
+                        created_at,
+                    )
+                }
+            };
         audit(
             &mut tx,
             scope.organization_id,
@@ -941,18 +1070,18 @@ impl KnowledgeStore {
                 collection_id,
                 kind: "upload".into(),
                 display_name: display_name.trim().into(),
-                active_revision_id: None,
-                state: "active".into(),
-                created_at: now,
+                active_revision_id,
+                state: source_state,
+                created_at: source_created_at,
             },
             ripple_knowledge_domain::IngestionJobResponse {
                 id: job_id,
                 source_id: Some(source_id),
                 revision_id: Some(revision_id),
-                state: "queued".into(),
-                progress_current: 0,
-                progress_total: Some(byte_size as i64),
-                created_at: now,
+                state: job_state,
+                progress_current,
+                progress_total,
+                created_at: job_created_at,
             },
         ))
     }
@@ -1327,6 +1456,10 @@ fn parse_collection_role(value: &str) -> Result<CollectionRole, KnowledgeError> 
 fn normalize_username(value: &str) -> String {
     value.trim().to_lowercase()
 }
+fn normalize_source_identity(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
 fn validate_username(value: &str) -> Result<(), KnowledgeError> {
     let normalized = normalize_username(value);
     if normalized.len() < 3
